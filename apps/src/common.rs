@@ -28,6 +28,8 @@
 //!
 //! This module provides some utility functions that are common to quiche
 //! applications.
+//! 
+//! This will probably be edited.
 
 use std::io::prelude::*;
 
