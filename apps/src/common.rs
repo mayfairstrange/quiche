@@ -1822,7 +1822,6 @@ impl HttpConn for Http3Conn {
             info!("lowest active urgency = {}", min_active_urg);
         }
 
-        // ❷ send only writable streams whose urgency == min_active_urg
         for stream_id in writable_response_streams(conn) {
             if let Some(resp) = partial_responses.get(&stream_id) {
                 info!(
@@ -1901,7 +1900,6 @@ impl HttpConn for Http3Conn {
         }
 
         resp.headers = None;
-        resp.priority = None;
 
         let body = &resp.body[resp.written..];
 
