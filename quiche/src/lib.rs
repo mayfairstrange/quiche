@@ -601,32 +601,32 @@ pub enum Error {
 pub enum WireErrorCode {
     /// An endpoint uses this with CONNECTION_CLOSE to signal that the
     /// connection is being closed abruptly in the absence of any error.
-    NoError              = 0x0,
+    NoError = 0x0,
     /// The endpoint encountered an internal error and cannot continue with the
     /// connection.
-    InternalError        = 0x1,
+    InternalError = 0x1,
     /// The server refused to accept a new connection.
-    ConnectionRefused    = 0x2,
+    ConnectionRefused = 0x2,
     /// An endpoint received more data than it permitted in its advertised data
     /// limits; see Section 4.
-    FlowControlError     = 0x3,
+    FlowControlError = 0x3,
     /// An endpoint received a frame for a stream identifier that exceeded its
     /// advertised stream limit for the corresponding stream type.
-    StreamLimitError     = 0x4,
+    StreamLimitError = 0x4,
     /// An endpoint received a frame for a stream that was not in a state that
     /// permitted that frame.
-    StreamStateError     = 0x5,
+    StreamStateError = 0x5,
     /// (1) An endpoint received a STREAM frame containing data that exceeded
     /// the previously established final size, (2) an endpoint received a
     /// STREAM frame or a RESET_STREAM frame containing a final size that
     /// was lower than the size of stream data that was already received, or
     /// (3) an endpoint received a STREAM frame or a RESET_STREAM frame
     /// containing a different final size to the one already established.
-    FinalSizeError       = 0x6,
+    FinalSizeError = 0x6,
     /// An endpoint received a frame that was badly formatted -- for instance, a
     /// frame of an unknown type or an ACK frame that has more
     /// acknowledgment ranges than the remainder of the packet could carry.
-    FrameEncodingError   = 0x7,
+    FrameEncodingError = 0x7,
     /// An endpoint received transport parameters that were badly formatted,
     /// included an invalid value, omitted a mandatory transport parameter,
     /// included a forbidden transport parameter, or were otherwise in
@@ -639,25 +639,25 @@ pub enum WireErrorCode {
     ConnectionIdLimitError = 0x9,
     /// An endpoint detected an error with protocol compliance that was not
     /// covered by more specific error codes.
-    ProtocolViolation    = 0xa,
+    ProtocolViolation = 0xa,
     /// A server received a client Initial that contained an invalid Token
     /// field.
-    InvalidToken         = 0xb,
+    InvalidToken = 0xb,
     /// The application or application protocol caused the connection to be
     /// closed.
-    ApplicationError     = 0xc,
+    ApplicationError = 0xc,
     /// An endpoint has received more data in CRYPTO frames than it can buffer.
     CryptoBufferExceeded = 0xd,
     /// An endpoint detected errors in performing key updates.
-    KeyUpdateError       = 0xe,
+    KeyUpdateError = 0xe,
     /// An endpoint has reached the confidentiality or integrity limit for the
     /// AEAD algorithm used by the given connection.
-    AeadLimitReached     = 0xf,
+    AeadLimitReached = 0xf,
     /// An endpoint has determined that the network path is incapable of
     /// supporting QUIC. An endpoint is unlikely to receive a
     /// CONNECTION_CLOSE frame carrying this code except when the path does
     /// not support a large enough MTU.
-    NoViablePath         = 0x10,
+    NoViablePath = 0x10,
 }
 
 impl Error {
@@ -665,16 +665,19 @@ impl Error {
         match self {
             Error::Done => WireErrorCode::NoError as u64,
             Error::InvalidFrame => WireErrorCode::FrameEncodingError as u64,
-            Error::InvalidStreamState(..) =>
-                WireErrorCode::StreamStateError as u64,
-            Error::InvalidTransportParam =>
-                WireErrorCode::TransportParameterError as u64,
+            Error::InvalidStreamState(..) => {
+                WireErrorCode::StreamStateError as u64
+            },
+            Error::InvalidTransportParam => {
+                WireErrorCode::TransportParameterError as u64
+            },
             Error::FlowControl => WireErrorCode::FlowControlError as u64,
             Error::StreamLimit => WireErrorCode::StreamLimitError as u64,
             Error::IdLimit => WireErrorCode::ConnectionIdLimitError as u64,
             Error::FinalSize => WireErrorCode::FinalSizeError as u64,
-            Error::CryptoBufferExceeded =>
-                WireErrorCode::CryptoBufferExceeded as u64,
+            Error::CryptoBufferExceeded => {
+                WireErrorCode::CryptoBufferExceeded as u64
+            },
             Error::KeyUpdate => WireErrorCode::KeyUpdateError as u64,
             _ => WireErrorCode::ProtocolViolation as u64,
         }
@@ -776,7 +779,7 @@ pub struct ConnectionError {
 #[derive(PartialEq, Eq)]
 pub enum Shutdown {
     /// Stop receiving stream data.
-    Read  = 0,
+    Read = 0,
 
     /// Stop sending stream data.
     Write = 1,
@@ -788,10 +791,10 @@ pub enum Shutdown {
 #[cfg_attr(docsrs, doc(cfg(feature = "qlog")))]
 pub enum QlogLevel {
     /// Logs any events of Core importance.
-    Core  = 0,
+    Core = 0,
 
     /// Logs any events of Core and Base importance.
-    Base  = 1,
+    Base = 1,
 
     /// Logs any events of Core, Base and Extra importance
     Extra = 2,
@@ -2765,6 +2768,7 @@ impl<F: BufFactory> Connection<F> {
         Ok(done)
     }
 
+
     fn process_undecrypted_0rtt_packets(&mut self) -> Result<()> {
         // Process previously undecryptable 0-RTT packets if the decryption key
         // is now available.
@@ -3084,9 +3088,9 @@ impl<F: BufFactory> Connection<F> {
             Some(v) => v,
 
             None => {
-                if hdr.ty == packet::Type::ZeroRTT &&
-                    self.undecryptable_pkts.len() < MAX_UNDECRYPTABLE_PACKETS &&
-                    !self.is_established()
+                if hdr.ty == packet::Type::ZeroRTT
+                    && self.undecryptable_pkts.len() < MAX_UNDECRYPTABLE_PACKETS
+                    && !self.is_established()
                 {
                     // Buffer 0-RTT packets when the required read key is not
                     // available yet, and process them later.
@@ -3140,9 +3144,9 @@ impl<F: BufFactory> Connection<F> {
         // Check for key update.
         let mut aead_next = None;
 
-        if self.handshake_confirmed &&
-            hdr.ty != Type::ZeroRTT &&
-            hdr.key_phase != self.key_phase
+        if self.handshake_confirmed
+            && hdr.ty != Type::ZeroRTT
+            && hdr.key_phase != self.key_phase
         {
             // Check if this packet arrived before key update.
             if let Some(key_update) = self.crypto_ctx[epoch]
@@ -3393,7 +3397,7 @@ impl<F: BufFactory> Connection<F> {
                 match acked {
                     frame::Frame::Ping {
                         mtu_probe: Some(mtu_probe),
-                    } =>
+                    } => {
                         if let Some(pmtud) = p.pmtud.as_mut() {
                             trace!(
                                 "{} pmtud probe acked; probe size {:?}",
@@ -3434,7 +3438,8 @@ impl<F: BufFactory> Connection<F> {
                                 p.recovery
                                     .pmtud_update_max_datagram_size(current_mtu);
                             }
-                        },
+                        }
+                    },
 
                     frame::Frame::ACK { ranges, .. } => {
                         // Stop acknowledging packets less than or equal to the
@@ -3572,9 +3577,9 @@ impl<F: BufFactory> Connection<F> {
             // Did the peer migrated to another path?
             let active_path_id = self.paths.get_active_path_id()?;
 
-            if self.is_server &&
-                recv_pid != active_path_id &&
-                self.pkt_num_spaces[epoch].largest_rx_non_probing_pkt_num == pn
+            if self.is_server
+                && recv_pid != active_path_id
+                && self.pkt_num_spaces[epoch].largest_rx_non_probing_pkt_num == pn
             {
                 self.on_peer_migrated(recv_pid, self.disable_dcid_reuse, now)?;
             }
@@ -3867,8 +3872,8 @@ impl<F: BufFactory> Connection<F> {
             }
 
             // Don't coalesce packets that must go on different paths.
-            if !(from.is_some() && to.is_some()) &&
-                self.get_send_path_id(from, to)? != send_pid
+            if !(from.is_some() && to.is_some())
+                && self.get_send_path_id(from, to)? != send_pid
             {
                 break;
             }
@@ -3994,11 +3999,12 @@ impl<F: BufFactory> Connection<F> {
                         stream_id,
                         error_code,
                         final_size,
-                    } =>
+                    } => {
                         if self.streams.get(stream_id).is_some() {
                             self.streams
                                 .insert_reset(stream_id, error_code, final_size);
-                        },
+                        }
+                    },
 
                     // Retransmit HANDSHAKE_DONE only if it hasn't been acked at
                     // least once already.
@@ -4026,11 +4032,12 @@ impl<F: BufFactory> Connection<F> {
 
                     frame::Frame::Ping {
                         mtu_probe: Some(failed_probe),
-                    } =>
+                    } => {
                         if let Some(pmtud) = p.pmtud.as_mut() {
                             trace!("pmtud probe dropped: {failed_probe}");
                             pmtud.failed_probe(failed_probe);
-                        },
+                        }
+                    },
 
                     _ => (),
                 }
@@ -4191,19 +4198,17 @@ impl<F: BufFactory> Connection<F> {
         // generate an ACK (if there's anything to ACK) since we're going to
         // send a packet with PING anyways, even if we haven't received anything
         // ACK eliciting.
-        if pkt_space.recv_pkt_need_ack.len() > 0 &&
-            (pkt_space.ack_elicited || ack_elicit_required) &&
-            (!is_closing ||
-                (pkt_type == Type::Handshake &&
-                    self.local_error
-                        .as_ref()
-                        .is_some_and(|le| le.is_app))) &&
-            path.active()
+        if pkt_space.recv_pkt_need_ack.len() > 0
+            && (pkt_space.ack_elicited || ack_elicit_required)
+            && (!is_closing
+                || (pkt_type == Type::Handshake
+                    && self.local_error.as_ref().is_some_and(|le| le.is_app)))
+            && path.active()
         {
             let ack_delay = pkt_space.largest_rx_pkt_time.elapsed();
 
-            let ack_delay = ack_delay.as_micros() as u64 /
-                2_u64
+            let ack_delay = ack_delay.as_micros() as u64
+                / 2_u64
                     .pow(self.local_transport_params.ack_delay_exponent as u32);
 
             let frame = frame::Frame::ACK {
@@ -4368,9 +4373,9 @@ impl<F: BufFactory> Connection<F> {
         if pkt_type == packet::Type::Short && !is_closing && path.active() {
             // Create HANDSHAKE_DONE frame.
             // self.should_send_handshake_done() but without the need to borrow
-            if self.handshake_completed &&
-                !self.handshake_done_sent &&
-                self.is_server
+            if self.handshake_completed
+                && !self.handshake_done_sent
+                && self.is_server
             {
                 let frame = frame::Frame::HandshakeDone;
 
@@ -4466,8 +4471,8 @@ impl<F: BufFactory> Connection<F> {
             }
 
             // Create MAX_DATA frame as needed.
-            if self.almost_full &&
-                flow_control.max_data() < flow_control.max_data_next()
+            if self.almost_full
+                && flow_control.max_data() < flow_control.max_data_next()
             {
                 // Autotune the connection window size.
                 flow_control.autotune_window(now, path.recovery.rtt());
@@ -4609,10 +4614,10 @@ impl<F: BufFactory> Connection<F> {
         }
 
         // Create CRYPTO frame.
-        if crypto_ctx.crypto_stream.is_flushable() &&
-            left > frame::MAX_CRYPTO_OVERHEAD &&
-            !is_closing &&
-            path.active()
+        if crypto_ctx.crypto_stream.is_flushable()
+            && left > frame::MAX_CRYPTO_OVERHEAD
+            && !is_closing
+            && path.active()
         {
             let crypto_off = crypto_ctx.crypto_stream.send.off_front();
 
@@ -4691,11 +4696,11 @@ impl<F: BufFactory> Connection<F> {
         }
 
         // Create DATAGRAM frame.
-        if (pkt_type == packet::Type::Short || pkt_type == packet::Type::ZeroRTT) &&
-            left > frame::MAX_DGRAM_OVERHEAD &&
-            !is_closing &&
-            path.active() &&
-            do_dgram
+        if (pkt_type == packet::Type::Short || pkt_type == packet::Type::ZeroRTT)
+            && left > frame::MAX_DGRAM_OVERHEAD
+            && !is_closing
+            && path.active()
+            && do_dgram
         {
             if let Some(max_dgram_payload) = max_dgram_len {
                 while let Some(len) = self.dgram_send_queue.peek_front_len() {
@@ -4773,11 +4778,11 @@ impl<F: BufFactory> Connection<F> {
         }
 
         // Create a single STREAM frame for the first stream that is flushable.
-        if (pkt_type == packet::Type::Short || pkt_type == packet::Type::ZeroRTT) &&
-            left > frame::MAX_STREAM_OVERHEAD &&
-            !is_closing &&
-            path.active() &&
-            !dgram_emitted
+        if (pkt_type == packet::Type::Short || pkt_type == packet::Type::ZeroRTT)
+            && left > frame::MAX_STREAM_OVERHEAD
+            && !is_closing
+            && path.active()
+            && !dgram_emitted
         {
             while let Some(priority_key) = self.streams.peek_flushable() {
                 let stream_id = priority_key.id;
@@ -4892,10 +4897,10 @@ impl<F: BufFactory> Connection<F> {
         // - if we've sent too many non ack-eliciting packets without having
         // sent an ACK eliciting one; OR
         // - the application requested an ack-eliciting frame be sent.
-        if (ack_elicit_required || path.needs_ack_eliciting) &&
-            !ack_eliciting &&
-            left >= 1 &&
-            !is_closing
+        if (ack_elicit_required || path.needs_ack_eliciting)
+            && !ack_eliciting
+            && left >= 1
+            && !is_closing
         {
             let frame = frame::Frame::Ping { mtu_probe: None };
 
@@ -4910,9 +4915,9 @@ impl<F: BufFactory> Connection<F> {
             path.recovery.ping_sent(epoch);
         }
 
-        if !has_data &&
-            !dgram_emitted &&
-            cwnd_available > frame::MAX_STREAM_OVERHEAD
+        if !has_data
+            && !dgram_emitted
+            && cwnd_available > frame::MAX_STREAM_OVERHEAD
         {
             path.recovery.on_app_limited();
         }
@@ -4932,9 +4937,9 @@ impl<F: BufFactory> Connection<F> {
         // as Initial always requires padding.
         //
         // 2) this is a probing packet towards an unvalidated peer address.
-        if (has_initial || !path.validated()) &&
-            pkt_type == packet::Type::Short &&
-            left >= 1
+        if (has_initial || !path.validated())
+            && pkt_type == packet::Type::Short
+            && left >= 1
         {
             let frame = frame::Frame::Padding { len: left };
 
@@ -5258,8 +5263,8 @@ impl<F: BufFactory> Connection<F> {
         &mut self, stream_id: u64, out: &mut [u8],
     ) -> Result<(usize, bool)> {
         // We can't read on our own unidirectional streams.
-        if !stream::is_bidi(stream_id) &&
-            stream::is_local(stream_id, self.is_server)
+        if !stream::is_bidi(stream_id)
+            && stream::is_local(stream_id, self.is_server)
         {
             return Err(Error::InvalidStreamState(stream_id));
         }
@@ -5441,8 +5446,8 @@ impl<F: BufFactory> Connection<F> {
         SND: FnOnce(&mut stream::Stream<F>, B, usize, bool) -> Result<(usize, R)>,
     {
         // We can't write on the peer's unidirectional streams.
-        if !stream::is_bidi(stream_id) &&
-            !stream::is_local(stream_id, self.is_server)
+        if !stream::is_bidi(stream_id)
+            && !stream::is_local(stream_id, self.is_server)
         {
             return Err(Error::InvalidStreamState(stream_id));
         }
@@ -5654,17 +5659,17 @@ impl<F: BufFactory> Connection<F> {
         &mut self, stream_id: u64, direction: Shutdown, err: u64,
     ) -> Result<()> {
         // Don't try to stop a local unidirectional stream.
-        if direction == Shutdown::Read &&
-            stream::is_local(stream_id, self.is_server) &&
-            !stream::is_bidi(stream_id)
+        if direction == Shutdown::Read
+            && stream::is_local(stream_id, self.is_server)
+            && !stream::is_bidi(stream_id)
         {
             return Err(Error::InvalidStreamState(stream_id));
         }
 
         // Don't try to reset a remote unidirectional stream.
-        if direction == Shutdown::Write &&
-            !stream::is_local(stream_id, self.is_server) &&
-            !stream::is_bidi(stream_id)
+        if direction == Shutdown::Write
+            && !stream::is_local(stream_id, self.is_server)
+            && !stream::is_bidi(stream_id)
         {
             return Err(Error::InvalidStreamState(stream_id));
         }
@@ -5799,12 +5804,13 @@ impl<F: BufFactory> Connection<F> {
 
                     // Return the stream to the application immediately if it's
                     // stopped.
-                    Err(_) =>
+                    Err(_) => {
                         return {
                             self.streams.remove_writable(&priority_key);
 
                             Some(priority_key.id)
-                        },
+                        }
+                    },
                 };
 
                 if cmp::min(self.tx_cap, cap) >= stream.send_lowat {
@@ -6242,8 +6248,8 @@ impl<F: BufFactory> Connection<F> {
 
         let active_path = self.paths.get_active_mut()?;
 
-        if self.dgram_send_queue.byte_size() >
-            active_path.recovery.cwnd_available()
+        if self.dgram_send_queue.byte_size()
+            > active_path.recovery.cwnd_available()
         {
             active_path.recovery.update_app_limited(false);
         }
@@ -6272,8 +6278,8 @@ impl<F: BufFactory> Connection<F> {
 
         let active_path = self.paths.get_active_mut()?;
 
-        if self.dgram_send_queue.byte_size() >
-            active_path.recovery.cwnd_available()
+        if self.dgram_send_queue.byte_size()
+            > active_path.recovery.cwnd_available()
         {
             active_path.recovery.update_app_limited(false);
         }
@@ -6597,9 +6603,9 @@ impl<F: BufFactory> Connection<F> {
             // Ensures that a Source Connection ID has been dedicated to this
             // path, or a free one is available. This is only required if the
             // host uses non-zero length Source Connection IDs.
-            if !self.ids.zero_length_scid() &&
-                path.active_scid_seq.is_none() &&
-                self.ids.available_scids() == 0
+            if !self.ids.zero_length_scid()
+                && path.active_scid_seq.is_none()
+                && self.ids.available_scids() == 0
             {
                 return Err(Error::OutOfIdentifiers);
             }
@@ -6741,9 +6747,9 @@ impl<F: BufFactory> Connection<F> {
 
         let active_path_id = self.paths.get_active_path_id()?;
 
-        if active_path_dcid_seq == dcid_seq &&
-            self.ids.lowest_available_dcid_seq().is_none() &&
-            !self
+        if active_path_dcid_seq == dcid_seq
+            && self.ids.lowest_available_dcid_seq().is_none()
+            && !self
                 .paths
                 .iter()
                 .any(|(pid, p)| pid != active_path_id && p.usable())
@@ -7229,8 +7235,9 @@ impl<F: BufFactory> Connection<F> {
     ) -> Result<()> {
         // Validate initial_source_connection_id.
         match &peer_params.initial_source_connection_id {
-            Some(v) if v != &self.destination_id() =>
-                return Err(Error::InvalidTransportParam),
+            Some(v) if v != &self.destination_id() => {
+                return Err(Error::InvalidTransportParam)
+            },
 
             Some(_) => (),
 
@@ -7242,15 +7249,17 @@ impl<F: BufFactory> Connection<F> {
         // Validate original_destination_connection_id.
         if let Some(odcid) = &self.odcid {
             match &peer_params.original_destination_connection_id {
-                Some(v) if v != odcid =>
-                    return Err(Error::InvalidTransportParam),
+                Some(v) if v != odcid => {
+                    return Err(Error::InvalidTransportParam)
+                },
 
                 Some(_) => (),
 
                 // original_destination_connection_id must be
                 // sent by the server.
-                None if !self.is_server =>
-                    return Err(Error::InvalidTransportParam),
+                None if !self.is_server => {
+                    return Err(Error::InvalidTransportParam)
+                },
 
                 None => (),
             }
@@ -7259,8 +7268,9 @@ impl<F: BufFactory> Connection<F> {
         // Validate retry_source_connection_id.
         if let Some(rscid) = &self.rscid {
             match &peer_params.retry_source_connection_id {
-                Some(v) if v != rscid =>
-                    return Err(Error::InvalidTransportParam),
+                Some(v) if v != rscid => {
+                    return Err(Error::InvalidTransportParam)
+                },
 
                 Some(_) => (),
 
@@ -7385,8 +7395,8 @@ impl<F: BufFactory> Connection<F> {
                         );
                     }
 
-                    if ex_data.local_transport_params !=
-                        self.local_transport_params
+                    if ex_data.local_transport_params
+                        != self.local_transport_params
                     {
                         self.streams.set_max_streams_bidi(
                             ex_data
@@ -7486,14 +7496,17 @@ impl<F: BufFactory> Connection<F> {
                 match epoch {
                     // Downgrade the epoch to Handshake as the handshake is not
                     // completed yet.
-                    packet::Epoch::Application =>
-                        return Ok(packet::Type::Handshake),
+                    packet::Epoch::Application => {
+                        return Ok(packet::Type::Handshake)
+                    },
 
                     // Downgrade the epoch to Initial as the remote peer might
                     // not be able to decrypt handshake packets yet.
                     packet::Epoch::Handshake
                         if self.crypto_ctx[packet::Epoch::Initial].has_keys() =>
-                        return Ok(packet::Type::Initial),
+                    {
+                        return Ok(packet::Type::Initial)
+                    },
 
                     _ => (),
                 };
@@ -7534,29 +7547,30 @@ impl<F: BufFactory> Connection<F> {
         // If there are flushable, almost full or blocked streams, use the
         // Application epoch.
         let send_path = self.paths.get(send_pid)?;
-        if (self.is_established() || self.is_in_early_data()) &&
-            (self.should_send_handshake_done() ||
-                self.almost_full ||
-                self.blocked_limit.is_some() ||
-                self.dgram_send_queue.has_pending() ||
-                self.local_error
+        if (self.is_established() || self.is_in_early_data())
+            && (self.should_send_handshake_done()
+                || self.almost_full
+                || self.blocked_limit.is_some()
+                || self.dgram_send_queue.has_pending()
+                || self
+                    .local_error
                     .as_ref()
-                    .is_some_and(|conn_err| conn_err.is_app) ||
-                self.streams.should_update_max_streams_bidi() ||
-                self.streams.should_update_max_streams_uni() ||
-                self.streams.has_flushable() ||
-                self.streams.has_almost_full() ||
-                self.streams.has_blocked() ||
-                self.streams.has_reset() ||
-                self.streams.has_stopped() ||
-                self.ids.has_new_scids() ||
-                self.ids.has_retire_dcids() ||
-                send_path
+                    .is_some_and(|conn_err| conn_err.is_app)
+                || self.streams.should_update_max_streams_bidi()
+                || self.streams.should_update_max_streams_uni()
+                || self.streams.has_flushable()
+                || self.streams.has_almost_full()
+                || self.streams.has_blocked()
+                || self.streams.has_reset()
+                || self.streams.has_stopped()
+                || self.ids.has_new_scids()
+                || self.ids.has_retire_dcids()
+                || send_path
                     .pmtud
                     .as_ref()
-                    .is_some_and(|pmtud| pmtud.should_probe()) ||
-                send_path.needs_ack_eliciting ||
-                send_path.probing_required())
+                    .is_some_and(|pmtud| pmtud.should_probe())
+                || send_path.needs_ack_eliciting
+                || send_path.probing_required())
         {
             // Only clients can send 0-RTT packets.
             if !self.is_server && self.is_in_early_data() {
@@ -7604,9 +7618,9 @@ impl<F: BufFactory> Connection<F> {
                     ))
                     .ok_or(Error::InvalidFrame)?;
 
-                if epoch == packet::Epoch::Handshake ||
-                    (epoch == packet::Epoch::Application &&
-                        self.is_established())
+                if epoch == packet::Epoch::Handshake
+                    || (epoch == packet::Epoch::Application
+                        && self.is_established())
                 {
                     self.peer_verified_initial_address = true;
                 }
@@ -7677,8 +7691,8 @@ impl<F: BufFactory> Connection<F> {
                 final_size,
             } => {
                 // Peer can't send on our unidirectional streams.
-                if !stream::is_bidi(stream_id) &&
-                    stream::is_local(stream_id, self.is_server)
+                if !stream::is_bidi(stream_id)
+                    && stream::is_local(stream_id, self.is_server)
                 {
                     return Err(Error::InvalidStreamState(stream_id));
                 }
@@ -7728,8 +7742,8 @@ impl<F: BufFactory> Connection<F> {
                 error_code,
             } => {
                 // STOP_SENDING on a receive-only stream is a fatal error.
-                if !stream::is_local(stream_id, self.is_server) &&
-                    !stream::is_bidi(stream_id)
+                if !stream::is_local(stream_id, self.is_server)
+                    && !stream::is_bidi(stream_id)
                 {
                     return Err(Error::InvalidStreamState(stream_id));
                 }
@@ -7809,15 +7823,16 @@ impl<F: BufFactory> Connection<F> {
             frame::Frame::CryptoHeader { .. } => unreachable!(),
 
             // TODO: implement stateless retry
-            frame::Frame::NewToken { .. } =>
+            frame::Frame::NewToken { .. } => {
                 if self.is_server {
                     return Err(Error::InvalidPacket);
-                },
+                }
+            },
 
             frame::Frame::Stream { stream_id, data } => {
                 // Peer can't send on our unidirectional streams.
-                if !stream::is_bidi(stream_id) &&
-                    stream::is_local(stream_id, self.is_server)
+                if !stream::is_bidi(stream_id)
+                    && stream::is_local(stream_id, self.is_server)
                 {
                     return Err(Error::InvalidStreamState(stream_id));
                 }
@@ -7884,8 +7899,8 @@ impl<F: BufFactory> Connection<F> {
 
             frame::Frame::MaxStreamData { stream_id, max } => {
                 // Peer can't receive on its own unidirectional streams.
-                if !stream::is_bidi(stream_id) &&
-                    !stream::is_local(stream_id, self.is_server)
+                if !stream::is_bidi(stream_id)
+                    && !stream::is_local(stream_id, self.is_server)
                 {
                     return Err(Error::InvalidStreamState(stream_id));
                 }
@@ -8156,8 +8171,8 @@ impl<F: BufFactory> Connection<F> {
         // If the transport parameter is set to 0, then the respective endpoint
         // decided to disable the idle timeout. If both are disabled we should
         // not set any timeout.
-        if self.local_transport_params.max_idle_timeout == 0 &&
-            self.peer_transport_params.max_idle_timeout == 0
+        if self.local_transport_params.max_idle_timeout == 0
+            && self.peer_transport_params.max_idle_timeout == 0
         {
             return None;
         }
@@ -8233,10 +8248,10 @@ impl<F: BufFactory> Connection<F> {
             .map(|(_, p)| p.recovery.cwnd_available())
             .sum();
 
-        ((self.tx_buffered + self.dgram_send_queue_byte_size()) < cwin_available) &&
-            (self.tx_data.saturating_sub(self.last_tx_data)) <
-                cwin_available as u64 &&
-            cwin_available > 0
+        ((self.tx_buffered + self.dgram_send_queue_byte_size()) < cwin_available)
+            && (self.tx_data.saturating_sub(self.last_tx_data))
+                < cwin_available as u64
+            && cwin_available > 0
     }
 
     fn set_initial_dcid(

@@ -497,9 +497,9 @@ fn main() {
 
                 // Visit all writable response streams to send any remaining HTTP
                 // content.
-                for stream_id in writable_response_streams(conn) {
-                    http_conn.handle_writable(conn, partial_responses, stream_id);
-                }
+                // for stream_id in writable_response_streams(conn) {
+                //     http_conn.handle_writable(conn, partial_responses, stream_id);
+                // }
 
                 if http_conn
                     .handle_requests(

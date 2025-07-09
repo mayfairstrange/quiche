@@ -46,6 +46,7 @@ use std::cell::RefCell;
 
 use std::path;
 
+use log::Level;
 use ring::rand::SecureRandom;
 
 use quiche::ConnectionId;
@@ -78,6 +79,12 @@ pub struct PartialResponse {
     pub body: Vec<u8>,
 
     pub written: usize,
+}
+
+impl PartialResponse {
+    fn urgency(&self) -> u8 {
+        self.priority.as_ref().map(|p| p.urgency()).unwrap_or(3)
+    }
 }
 
 pub type ClientId = u64;
@@ -158,8 +165,9 @@ pub fn make_qlog_writer(
     match std::fs::File::create(&path) {
         Ok(f) => std::io::BufWriter::new(f),
 
-        Err(e) =>
-            panic!("Error creating qlog file attempted path was {path:?}: {e}"),
+        Err(e) => {
+            panic!("Error creating qlog file attempted path was {path:?}: {e}")
+        },
     }
 }
 
@@ -754,6 +762,60 @@ fn make_h3_config(
 
     config
 }
+/// Parse one bytes item from a Range header and return **inclusive**
+/// `(start, end)` offsets.  `len` = total size of the file.
+fn parse_one_range(item: &str, len: u64) -> Result<(u64, u64), ()> {
+    let parts: Vec<_> = item.splitn(2, '-').collect();
+    if parts.len() != 2 {
+        return Err(());
+    }
+
+    let start_str = parts[0].trim();
+    let end_str = parts[1].trim();
+
+    // ── suffix form “-N”  (last N bytes)
+    if start_str.is_empty() {
+        let suffix = end_str.parse::<u64>().map_err(|_| ())?;
+        if suffix == 0 {
+            return Err(());
+        }
+        let suffix = suffix.min(len); // longer than file → whole file
+        let start = len - suffix;
+        let end = len - 1;
+        return Ok((start, end));
+    }
+
+    // ── normal or open-ended
+    let start = start_str.parse::<u64>().map_err(|_| ())?;
+    let end = if end_str.is_empty() {
+        len.checked_sub(1).ok_or(())? // “N-” means to EOF
+    } else {
+        end_str.parse::<u64>().map_err(|_| ())?
+    };
+
+    if start > end || end >= len {
+        return Err(());
+    }
+    Ok((start, end))
+}
+
+/// Parse **single or multi** “Range:” header.  
+/// Returns `Vec<(start,end)>` *in the order received*.
+fn parse_ranges(h: &str, len: u64) -> Result<Vec<(u64, u64)>, ()> {
+    if !h.starts_with("bytes=") {
+        return Err(());
+    }
+    let rhs = &h[6..];
+
+    let mut ranges = Vec::new();
+    for item in rhs.split(',') {
+        ranges.push(parse_one_range(item.trim(), len)?);
+    }
+    if ranges.is_empty() {
+        return Err(());
+    }
+    Ok(ranges)
+}
 
 pub struct Http3Conn {
     h3_conn: quiche::h3::Connection,
@@ -973,11 +1035,12 @@ impl Http3Conn {
         let decided_method = match method {
             Some(method) => {
                 match method {
-                    "" =>
+                    "" => {
                         return Err((
                             H3_MESSAGE_ERROR,
                             ":method value cannot be empty".to_string(),
-                        )),
+                        ))
+                    },
 
                     "CONNECT" => {
                         // not allowed
@@ -996,11 +1059,12 @@ impl Http3Conn {
                 }
             },
 
-            None =>
+            None => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     ":method cannot be missing".to_string(),
-                )),
+                ))
+            },
         };
 
         let decided_scheme = match scheme {
@@ -1024,54 +1088,61 @@ impl Http3Conn {
                 scheme
             },
 
-            None =>
+            None => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     ":scheme cannot be missing".to_string(),
-                )),
+                ))
+            },
         };
 
         let decided_host = match (authority, host) {
-            (None, Some("")) =>
+            (None, Some("")) => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     "host value cannot be empty".to_string(),
-                )),
+                ))
+            },
 
-            (Some(""), None) =>
+            (Some(""), None) => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     ":authority value cannot be empty".to_string(),
-                )),
+                ))
+            },
 
-            (Some(""), Some("")) =>
+            (Some(""), Some("")) => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     ":authority and host value cannot be empty".to_string(),
-                )),
+                ))
+            },
 
-            (None, None) =>
+            (None, None) => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     ":authority and host missing".to_string(),
-                )),
+                ))
+            },
 
             // Any other combo, prefer :authority
             (..) => authority.unwrap(),
         };
 
         let decided_path = match path {
-            Some("") =>
+            Some("") => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     ":path value cannot be empty".to_string(),
-                )),
+                ))
+            },
 
-            None =>
+            None => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     ":path cannot be missing".to_string(),
-                )),
+                ))
+            },
 
             Some(path) => path,
         };
@@ -1082,40 +1153,160 @@ impl Http3Conn {
         let pathbuf = path::PathBuf::from(url.path());
         let pathbuf = autoindex(pathbuf, index);
 
-        // Priority query string takes precedence over the header.
-        // So replace the header with one built here.
-        let query_priority = priority_field_value_from_query_string(&url);
-
-        if let Some(p) = query_priority {
+        // priority query string beats header
+        if let Some(p) = priority_field_value_from_query_string(&url) {
             priority = p.as_bytes().to_vec();
         }
 
-        let (status, body) = match decided_method {
-            "GET" => {
-                for c in pathbuf.components() {
-                    if let path::Component::Normal(v) = c {
-                        file_path.push(v)
+        // -------------------------- main switch -------------------------------
+        let (status, body, extra_headers) = match decided_method {
+            "GET" | "HEAD" => {
+                // Construct full file path from requested path
+                for component in pathbuf.components() {
+                    if let path::Component::Normal(v) = component {
+                        file_path.push(v);
                     }
                 }
 
-                match std::fs::read(file_path.as_path()) {
-                    Ok(data) => (200, data),
+                match std::fs::read(&file_path) {
+                    Err(_) => (404, b"Not Found!".to_vec(), vec![]),
 
-                    Err(_) => (404, b"Not Found!".to_vec()),
+                    Ok(file_bytes) => {
+                        let full_len = file_bytes.len() as u64;
+                        let is_head = decided_method == "HEAD";
+
+                        // Parse Range header if present
+                        let range_hdr = request
+                            .iter()
+                            .find(|h| h.name() == b"range")
+                            .and_then(|h| std::str::from_utf8(h.value()).ok());
+
+                        match range_hdr
+                            .map(|h| parse_ranges(h, full_len))
+                            .transpose()
+                        {
+                            // No range: respond with full file or metadata
+                            Ok(None) => {
+                                let body =
+                                    if is_head { vec![] } else { file_bytes };
+                                (
+                                    200,
+                                    body,
+                                    vec![quiche::h3::Header::new(
+                                        b"accept-ranges",
+                                        b"bytes",
+                                    )],
+                                )
+                            },
+
+                            // Single range
+                            Ok(Some(ranges)) if ranges.len() == 1 => {
+                                let (start, end) = ranges[0];
+                                let body = if is_head {
+                                    vec![]
+                                } else {
+                                    file_bytes[start as usize..=end as usize]
+                                        .to_vec()
+                                };
+
+                                (
+                                    206,
+                                    body,
+                                    vec![
+                                        quiche::h3::Header::new(
+                                            b"accept-ranges",
+                                            b"bytes",
+                                        ),
+                                        quiche::h3::Header::new(
+                                            b"content-range",
+                                            format!(
+                                                "bytes {}-{}/{}",
+                                                start, end, full_len
+                                            )
+                                            .as_bytes(),
+                                        ),
+                                    ],
+                                )
+                            },
+
+                            // Multi-range
+                            Ok(Some(ranges)) => {
+                                let boundary = "quicheboundary";
+                                let mut body = Vec::new();
+
+                                if !is_head {
+                                    use std::fmt::Write;
+
+                                    for (s, e) in ranges {
+                                        write!(
+                                    &mut body,
+                                    "--{}\r\nContent-Range: bytes {}-{}/{}\r\n\r\n",
+                                    boundary, s, e, full_len
+                                )
+                                .unwrap();
+                                        body.extend_from_slice(
+                                            &file_bytes[s as usize..=e as usize],
+                                        );
+                                        body.extend_from_slice(b"\r\n");
+                                    }
+
+                                    write!(&mut body, "--{}--\r\n", boundary)
+                                        .unwrap();
+                                }
+
+                                (
+                                    206,
+                                    body,
+                                    vec![
+                                        quiche::h3::Header::new(
+                                            b"accept-ranges",
+                                            b"bytes",
+                                        ),
+                                        quiche::h3::Header::new(
+                                            b"content-type",
+                                            format!(
+                                        "multipart/byteranges; boundary={}",
+                                        boundary
+                                    )
+                                            .as_bytes(),
+                                        ),
+                                    ],
+                                )
+                            },
+
+                            // Invalid or unsatisfiable range
+                            Err(_) => (
+                                416,
+                                b"Range Not Satisfiable".to_vec(),
+                                vec![quiche::h3::Header::new(
+                                    b"content-range",
+                                    format!("bytes */{}", full_len).as_bytes(),
+                                )],
+                            ),
+                        }
+                    },
                 }
             },
 
-            _ => (405, Vec::new()),
+            _ => (405, Vec::new(), vec![]),
         };
 
-        let headers = vec![
+        // --------------------------- make headers -----------------------------
+        let content_length = if decided_method == "HEAD" {
+            std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0)
+        } else {
+            body.len() as u64
+        };
+
+        let mut headers = vec![
             quiche::h3::Header::new(b":status", status.to_string().as_bytes()),
             quiche::h3::Header::new(b"server", b"quiche"),
             quiche::h3::Header::new(
                 b"content-length",
-                body.len().to_string().as_bytes(),
+                content_length.to_string().as_bytes(),
             ),
         ];
+        headers.extend(extra_headers);
 
         Ok((headers, body, priority))
     }
@@ -1270,14 +1461,15 @@ impl HttpConn for Http3Conn {
                                 rw.write_all(&buf[..read]).ok();
                             },
 
-                            None =>
+                            None => {
                                 if !self.dump_json {
                                     self.output_sink.borrow_mut()(unsafe {
                                         String::from_utf8_unchecked(
                                             buf[..read].to_vec(),
                                         )
                                     });
-                                },
+                                }
+                            },
                         }
                     }
                 },
@@ -1335,7 +1527,7 @@ impl HttpConn for Http3Conn {
                     quiche::h3::Event::PriorityUpdate,
                 )) => {
                     info!(
-                        "{} PRIORITY_UPDATE triggered for element ID={}",
+                        "{} PRIORITY_UPDAffffffTE triggered for element ID={}",
                         conn.trace_id(),
                         prioritized_element_id
                     );
@@ -1454,6 +1646,10 @@ impl HttpConn for Http3Conn {
                     }
 
                     if !priority.is_empty() {
+                        info!(
+                            "Priority was not empty! {}",
+                            String::from_utf8_lossy(&priority)
+                        );
                         headers.push(quiche::h3::Header::new(
                             b"priority",
                             priority.as_slice(),
@@ -1467,6 +1663,10 @@ impl HttpConn for Http3Conn {
 
                     #[cfg(not(feature = "sfv"))]
                     let priority = quiche::h3::Priority::default();
+
+                    #[cfg(feature = "sfv")]
+                    info!("sfv enabled");
+                    info!("Priority after sfv logic: {:?}", priority);
 
                     info!(
                         "{} prioritizing response on stream {} as {:?}",
@@ -1505,7 +1705,7 @@ impl HttpConn for Http3Conn {
 
                     let response = PartialResponse {
                         headers: None,
-                        priority: None,
+                        priority: Some(priority),
                         body,
                         written: 0,
                     };
@@ -1525,15 +1725,51 @@ impl HttpConn for Http3Conn {
 
                 Ok((_stream_id, quiche::h3::Event::Reset { .. })) => (),
 
-                Ok((
-                    prioritized_element_id,
-                    quiche::h3::Event::PriorityUpdate,
-                )) => {
+                Ok((stream_id, quiche::h3::Event::PriorityUpdate)) => {
                     info!(
                         "{} PRIORITY_UPDATE triggered for element ID={}",
                         conn.trace_id(),
-                        prioritized_element_id
+                        stream_id
                     );
+
+                    match self.h3_conn.take_last_priority_update(stream_id) {
+                        Ok(bytes) => {
+                            #[cfg(feature = "sfv")]
+                            let priority =
+                                quiche::h3::Priority::try_from(bytes.as_slice())
+                                    .unwrap_or_default();
+
+                            #[cfg(not(feature = "sfv"))]
+                            let priority = quiche::h3::Priority::default();
+
+                            info!(
+                                "{} updated priority for stream {} to {:?}",
+                                conn.trace_id(),
+                                stream_id,
+                                priority
+                            );
+
+                            if let Some(resp) =
+                                partial_responses.get_mut(&stream_id)
+                            {
+                                resp.priority = Some(priority);
+                            }
+                        },
+
+                        Err(quiche::h3::Error::Done) => {
+                            debug!(
+                                "{} no PRIORITY_UPDATE data available",
+                                conn.trace_id()
+                            );
+                        },
+
+                        Err(e) => {
+                            error!(
+                                "{} failed to read PRIORITY_UPDATE: {e}",
+                                conn.trace_id()
+                            );
+                        },
+                    }
                 },
 
                 Ok((goaway_id, quiche::h3::Event::GoAway)) => {
@@ -1558,21 +1794,52 @@ impl HttpConn for Http3Conn {
             }
         }
 
-        // Visit all writable response streams to send HTTP content.
-        for stream_id in writable_response_streams(conn) {
-            self.handle_writable(conn, partial_responses, stream_id);
+        // ❶ get the lowest urgency among *all* outstanding responses
+        let min_active_urg = partial_responses
+            .values()
+            .map(|r| r.urgency())
+            .min()
+            .unwrap_or(3);
+
+        // Dump every outstanding stream + its urgency
+        if log::log_enabled!(Level::Info) {
+            let mut dump = String::new();
+            for (id, resp) in partial_responses.iter() {
+                use std::fmt::Write;
+                let _ = write!(
+                    &mut dump,
+                    " [{} → u{}{}]",
+                    id,
+                    resp.urgency(),
+                    if resp.written == resp.body.len() {
+                        "(fin)"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            info!("active streams:{dump}");
+            info!("lowest active urgency = {}", min_active_urg);
         }
 
-        // Process datagram-related events.
-        while let Ok(len) = conn.dgram_recv(buf) {
-            let mut b = octets::Octets::with_slice(buf);
-            if let Ok(flow_id) = b.get_varint() {
+        // ❷ send only writable streams whose urgency == min_active_urg
+        for stream_id in writable_response_streams(conn) {
+            if let Some(resp) = partial_responses.get(&stream_id) {
                 info!(
-                    "Received DATAGRAM flow_id={} len={} data={:?}",
-                    flow_id,
-                    len,
-                    buf[b.off()..len].to_vec()
+                    "writable stream {} has urgency {}",
+                    stream_id,
+                    resp.urgency()
                 );
+
+                if resp.urgency() == min_active_urg {
+                    info!("→ scheduling stream {} for write", stream_id);
+                    self.handle_writable(conn, partial_responses, stream_id);
+                } else {
+                    info!(
+                        "→ skipping stream {} (higher-number urgency)",
+                        stream_id
+                    );
+                }
             }
         }
 
@@ -1656,5 +1923,121 @@ impl HttpConn for Http3Conn {
         if resp.written == resp.body.len() {
             partial_responses.remove(&stream_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quiche::h3::Header;
+
+    /// handy ctor
+    fn hdr(name: &str, value: &str) -> Header {
+        Header::new(name.as_bytes(), value.as_bytes())
+    }
+
+    /// extract a header value as &str
+    fn hval<'a>(hdrs: &'a [Header], name: &str) -> &'a str {
+        std::str::from_utf8(
+            hdrs.iter()
+                .find(|h| h.name() == name.as_bytes())
+                .expect(name)
+                .value(),
+        )
+        .unwrap()
+    }
+
+    /// path to `tests/data`
+    fn root() -> &'static str {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data")
+    }
+
+    /// build a minimal request header list
+    fn base_headers(range: Option<&str>) -> Vec<Header> {
+        let mut v = vec![
+            hdr(":method", "GET"),
+            hdr(":scheme", "http"),
+            hdr(":authority", "localhost"),
+            hdr(":path", "/foo.bin"),
+        ];
+        if let Some(r) = range {
+            v.push(hdr("range", r));
+        }
+        v
+    }
+
+    #[test]
+    fn full_file() {
+        let (hdrs, body, _) = Http3Conn::build_h3_response(
+            root(),
+            "index.html",
+            &base_headers(None),
+        )
+        .unwrap();
+        assert_eq!(hval(&hdrs, ":status"), "200");
+        assert_eq!(body.len(), 10);
+    }
+
+    #[test]
+    fn single_range_0_4() {
+        let (hdrs, body, _) = Http3Conn::build_h3_response(
+            root(),
+            "index.html",
+            &base_headers(Some("bytes=0-4")),
+        )
+        .unwrap();
+
+        assert_eq!(hval(&hdrs, ":status"), "206");
+        assert_eq!(hval(&hdrs, "content-range"), "bytes 0-4/10");
+        assert_eq!(body.len(), 5);
+        assert_eq!(body, b"01234");
+    }
+
+    #[test]
+    fn suffix_range_last_3() {
+        let (hdrs, body, _) = Http3Conn::build_h3_response(
+            root(),
+            "index.html",
+            &base_headers(Some("bytes=-3")),
+        )
+        .unwrap();
+
+        assert_eq!(hval(&hdrs, ":status"), "206");
+        assert_eq!(hval(&hdrs, "content-range"), "bytes 7-9/10");
+        assert_eq!(body, b"789");
+    }
+
+    #[test]
+    fn multi_range() {
+        let (hdrs, body, _) = Http3Conn::build_h3_response(
+            root(),
+            "index.html",
+            &base_headers(Some("bytes=0-0,9-9")),
+        )
+        .unwrap();
+
+        assert_eq!(hval(&hdrs, ":status"), "206");
+        // top-level must be multipart
+        assert!(hval(&hdrs, "content-type").starts_with("multipart/byteranges"));
+        // each part carries its own Content-Range:
+        assert!(std::str::from_utf8(&body)
+            .unwrap()
+            .contains("Content-Range: bytes 0-0/10"));
+        assert!(std::str::from_utf8(&body)
+            .unwrap()
+            .contains("Content-Range: bytes 9-9/10"));
+    }
+
+    #[test]
+    fn unsatisfiable() {
+        let (hdrs, _body, _) = Http3Conn::build_h3_response(
+            root(),
+            "index.html",
+            &base_headers(Some("bytes=100-101")),
+        )
+        .unwrap();
+
+        assert_eq!(hval(&hdrs, ":status"), "416");
+        assert_eq!(hval(&hdrs, "content-range"), "bytes */10");
     }
 }
