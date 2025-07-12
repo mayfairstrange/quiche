@@ -28,7 +28,7 @@
 //!
 //! This module provides some utility functions that are common to quiche
 //! applications.
-//! 
+//!
 //! This will probably be edited.
 
 use std::io::prelude::*;
@@ -40,6 +40,7 @@ use std::convert::TryFrom;
 
 use std::fmt::Write as _;
 
+use std::path::Path;
 use std::rc::Rc;
 
 use std::cell::RefCell;
@@ -817,6 +818,49 @@ fn parse_ranges(h: &str, len: u64) -> Result<Vec<(u64, u64)>, ()> {
     Ok(ranges)
 }
 
+fn mime_type_for_extension(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("html") | Some("htm") => "text/html",
+        Some("css") => "text/css",
+        Some("js") | Some("mjs") => "application/javascript",
+        Some("ts") => "application/typescript",
+        Some("json") | Some("map") => "application/json",
+        Some("wasm") => "application/wasm",
+        Some("xml") => "application/xml",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("ttf") => "font/ttf",
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        Some("eot") => "application/vnd.ms-fontobject",
+        Some("otf") => "font/otf",
+        Some("mp4") => "video/mp4",
+        Some("webm") => "video/webm",
+        Some("ogg") => "audio/ogg",
+        Some("mp3") => "audio/mpeg",
+        _ => "application/octet-stream", // safe default
+    }
+}
+
+fn get_path_and_query(
+    headers: &[quiche::h3::Header],
+) -> Option<(String, Option<String>)> {
+    for header in headers {
+        if std::str::from_utf8(header.name()).ok()? == ":path" {
+            let value = std::str::from_utf8(header.value()).ok()?;
+            let mut split = value.splitn(2, '?');
+            let path = split.next()?.to_string();
+            let query = split.next().map(|q| q.to_string());
+            return Some((path, query));
+        }
+    }
+    None
+}
+
 pub struct Http3Conn {
     h3_conn: quiche::h3::Connection,
     reqs_hdrs_sent: usize,
@@ -1175,6 +1219,8 @@ impl Http3Conn {
                         let full_len = file_bytes.len() as u64;
                         let is_head = decided_method == "HEAD";
 
+                        let mime_type = mime_type_for_extension(&file_path.as_path());
+
                         // Parse Range header if present
                         let range_hdr = request
                             .iter()
@@ -1192,10 +1238,16 @@ impl Http3Conn {
                                 (
                                     200,
                                     body,
-                                    vec![quiche::h3::Header::new(
-                                        b"accept-ranges",
-                                        b"bytes",
-                                    )],
+                                    vec![
+                                        quiche::h3::Header::new(
+                                            b"accept-ranges",
+                                            b"bytes",
+                                        ),
+                                        quiche::h3::Header::new(
+                                            b"content-type",
+                                            mime_type.as_bytes(),
+                                        ),
+                                    ],
                                 )
                             },
 
@@ -1224,6 +1276,10 @@ impl Http3Conn {
                                                 start, end, full_len
                                             )
                                             .as_bytes(),
+                                        ),
+                                        quiche::h3::Header::new(
+                                            b"content-type",
+                                            mime_type.as_bytes(),
                                         ),
                                     ],
                                 )
@@ -1599,6 +1655,68 @@ impl HttpConn for Http3Conn {
         loop {
             match self.h3_conn.poll(conn) {
                 Ok((stream_id, quiche::h3::Event::Headers { list, .. })) => {
+                    let (path, query) = match get_path_and_query(&list) {
+                        Some(pq) => pq,
+                        None => continue,
+                    };
+
+                    if path == "/_updatePriority" {
+                        if let Some(query_str) = query {
+                            use std::collections::HashMap;
+
+                            let params: HashMap<_, _> = query_str
+                                .split('&')
+                                .filter_map(|kv| {
+                                    let mut parts = kv.splitn(2, '=');
+                                    Some((parts.next()?, parts.next()?))
+                                })
+                                .collect();
+
+                            if let Some(id_str) = params.get("id") {
+                                if let Ok(id) = id_str.parse::<u64>() {
+                                    let urgency = params
+                                        .get("urgency")
+                                        .and_then(|v| v.parse::<u8>().ok())
+                                        .unwrap_or(3);
+                                    let incremental = params
+                                        .get("incremental")
+                                        .map(|v| *v == "true")
+                                        .unwrap_or(false);
+
+                                    let priority = quiche::h3::Priority::new(
+                                        urgency,
+                                        incremental,
+                                    );
+
+                                    if let Some(resp) =
+                                        partial_responses.get_mut(&id)
+                                    {
+                                        resp.priority = Some(priority);
+                                    }
+                                }
+                            }
+                        }
+
+                        let ok = vec![
+                            quiche::h3::Header::new(b":status", b"200"),
+                            quiche::h3::Header::new(
+                                b"content-type",
+                                b"text/plain",
+                            ),
+                        ];
+
+                        self.h3_conn
+                            .send_response(conn, stream_id, &ok, false)?;
+                        self.h3_conn.send_body(
+                            conn,
+                            stream_id,
+                            b"PRIORITY_UPDATE OK\n",
+                            true,
+                        )?;
+
+                        continue;
+                    }
+
                     info!(
                         "{} got request {:?} on stream id {}",
                         conn.trace_id(),
@@ -1630,6 +1748,11 @@ impl HttpConn for Http3Conn {
                                 continue;
                             },
                         };
+
+                    headers.push(quiche::h3::Header::new(
+                        b"h3-stream-id",
+                        stream_id.to_string().as_bytes(),
+                    ));
 
                     match self.h3_conn.take_last_priority_update(stream_id) {
                         Ok(v) => {
@@ -1822,21 +1945,24 @@ impl HttpConn for Http3Conn {
             info!("lowest active urgency = {}", min_active_urg);
         }
 
+        let soft_threshold = min_active_urg.saturating_add(1);
+
         for stream_id in writable_response_streams(conn) {
             if let Some(resp) = partial_responses.get(&stream_id) {
-                info!(
-                    "writable stream {} has urgency {}",
-                    stream_id,
-                    resp.urgency()
-                );
+                let urg = resp.urgency();
 
-                if resp.urgency() == min_active_urg {
+                info!(
+            "writable stream {} has urgency {} (min = {}, threshold = {})",
+            stream_id, urg, min_active_urg, soft_threshold
+        );
+
+                if urg <= soft_threshold {
                     info!("→ scheduling stream {} for write", stream_id);
                     self.handle_writable(conn, partial_responses, stream_id);
                 } else {
                     info!(
-                        "→ skipping stream {} (higher-number urgency)",
-                        stream_id
+                        "→ deferring stream {} (urgency {} > threshold)",
+                        stream_id, urg
                     );
                 }
             }
