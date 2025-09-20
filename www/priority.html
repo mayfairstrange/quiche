@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>H3 Priority Tester (quiche) — Staggered Starts</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+  :root { --bg:#0f1216; --panel:#141922; --text:#e6e6e6; --muted:#9aa4b2; --accent:#5eead4; --bad:#f87171; --ok:#4ade80; --warn:#fbbf24; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,"Fira Sans","Droid Sans"; }
+  header { padding:16px 20px; border-bottom:1px solid #202938; background:#0c0f13; position:sticky; top:0; z-index:1; }
+  header h1 { margin:0; font-size:16px; font-weight:600; letter-spacing:.2px; }
+  main { padding:20px; max-width:1100px; margin:auto; }
+  .card { background:var(--panel); border:1px solid #202938; border-radius:10px; padding:16px; margin-bottom:18px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  label { font-size:12px; color:var(--muted); }
+  input[type="text"], input[type="number"], select { width:100%; padding:8px 10px; background:#0d1117; color:var(--text); border:1px solid #222a39; border-radius:8px; font-family:var(--mono); }
+  .grow { flex:1 1 220px; }
+  button { background:#1b2432; color:#e5f8f5; border:1px solid #273246; border-radius:8px; padding:9px 12px; cursor:pointer; font-weight:600; }
+  button:hover { border-color:#3a4b67; }
+  .btn-accent { background:#123c36; border-color:#1d5b52; color:var(--accent); }
+  .btn-bad { background:#3a1012; border-color:#5d1c21; color:var(--bad); }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid #2a364a; background:#0e141d; color:#a3b2c7; font-family:var(--mono); }
+  .muted { color:var(--muted); }
+  .mono { font-family:var(--mono); }
+  .small { font-size:12px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid #202938; font-variant-numeric:tabular-nums; }
+  .bar { height:10px; background:#0d1117; border:1px solid #232a3a; border-radius:999px; overflow:hidden; }
+  .bar > div { height:100%; background:linear-gradient(90deg, #5eead4, #4ade80); width:0%; }
+  .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+  @media (max-width: 1000px){ .grid { grid-template-columns:1fr; } }
+  .legend { display:flex; gap:8px; flex-wrap:wrap; }
+  .legend span { border:1px solid #2a364a; padding:2px 6px; border-radius:6px; font-family:var(--mono); }
+  .box { background:#0d1117; border:1px solid #232a3a; border-radius:8px; padding:10px; overflow:auto; max-height:220px; }
+  
+</style>
+</head>
+<body>
+<header><h1>HTTP/3 Priority Tester (quiche) — Staggered Starts</h1></header>
+<main>
+  <div class="card">
+    <div class="row">
+      <div class="grow">
+        <label>Resource URL (same origin)</label>
+        <input id="url" type="text" value="/dl_sponza.glb"/>
+      </div>
+      <div class="grow">
+        <label>Number of concurrent requests</label>
+        <input id="nreq" type="number" min="2" max="12" value="6"/>
+      </div>
+      <div class="grow">
+        <label>Bytes per request (range length)</label>
+        <input id="bytesEach" type="text" value="4194304"/> <!-- 4 MiB -->
+      </div>
+      <div class="grow">
+        <label>Offsets strategy</label>
+        <select id="offsetMode">
+          <option value="sequential" selected>Sequential segments</option>
+          <option value="same">All same (contend on same bytes)</option>
+          <option value="random">Random offsets</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:8px;">
+      <div class="grow">
+        <label>Stagger gap per urgency step (ms)</label>
+        <input id="staggerMs" type="number" min="0" value="300"/>
+      </div>
+      <div class="grow">
+        <label>Start order</label>
+        <select id="startOrder">
+          <option value="lowFirst" selected>Low u first (highest priority first)</option>
+          <option value="asListed">As listed (no urgency-based staggering)</option>
+        </select>
+      </div>
+      <div class="grow">
+        <label>Urgency set (cycled)</label>
+        <input id="urgencies" type="text" value="0,1,2,4,6,7"/>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px; gap:8px;">
+      <div class="legend small">
+        <span>Priority header: Priority: u=URG, i=?1</span>
+        <span>Lower u => higher urgency</span>
+        <span>All requests use incremental (i=?1)</span>
+        <span>Lower-urgency requests are started AFTER higher-urgency ones when “Low u first” is selected.</span>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px; gap:8px;">
+      <button class="btn-accent" id="btnRun">Run test</button>
+      <button class="btn-bad" id="btnAbort">Abort</button>
+      <span class="small muted">Tip: DevTools → Network: show Protocol to confirm h3.</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3 style="margin:0 0 10px 0;">Requests</h3>
+      <div id="reqs"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 10px 0;">Timeline</h3>
+      <div id="summary" class="small muted" style="margin-bottom:8px;">—</div>
+      <table id="tbl">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>u</th>
+            <th>Priority hdr</th>
+            <th>Range</th>
+            <th>Start+Delay (ms)</th>
+            <th>TTFB (ms)</th>
+            <th>Done (ms)</th>
+            <th>Bytes</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div class="hr" style="height:1px;background:#202938;margin-top:10px;"></div>
+      <pre id="log" class="box mono"></pre>
+    </div>
+  </div>
+</main>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const logEl = $("#log");
+  let controllers = [];
+
+  function log(msg){ const t = new Date().toISOString(); logEl.textContent += `[${t}] ${msg}\n`; logEl.scrollTop = logEl.scrollHeight; }
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const kb = n => (n/1024).toFixed(1)+' KiB';
+  const msfmt = (t, base) => ((t - base).toFixed(1));
+
+  function mkRow(i, u, range, prio){
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${i+1}</td>
+      <td>${u}</td>
+      <td><code>${prio}</code></td>
+      <td><code>${range}</code></td>
+      <td data-start>—</td>
+      <td data-ttfb>—</td>
+      <td data-done>—</td>
+      <td data-bytes>0</td>
+      <td data-res>—</td>
+    `;
+    return tr;
+  }
+
+  function mkReqCard(i, u){
+    const div = document.createElement("div");
+    div.style.marginBottom = "10px";
+    div.innerHTML = `
+      <div class="row" style="gap:10px; align-items:center;">
+        <span class="pill">#${i+1} u=${u} i=?1</span>
+        <div class="bar" style="flex:1 1 auto;"><div id="bar${i}"></div></div>
+        <span class="small muted" id="pct${i}">0%</span>
+      </div>
+    `;
+    return div;
+  }
+
+  function parseUrgencies(n){
+    const raw = ($("#urgencies").value || "0,1,2,4,6,7")
+      .split(",").map(s => s.trim()).filter(Boolean).map(x => Math.max(0, Math.min(7, parseInt(x,10)||0)));
+    const res = [];
+    for(let i=0;i<n;i++) res.push(raw[i % raw.length]);
+    return res;
+  }
+
+  function calcRanges(n, len, mode, resourceSizeGuess = 64*1024*1024){
+    const ranges = [];
+    if(mode === "same"){
+      const s = 0, e = len-1;
+      for(let i=0;i<n;i++) ranges.push([s,e]);
+      return ranges;
+    }
+    if(mode === "random"){
+      for(let i=0;i<n;i++){
+        const maxStart = Math.max(0, resourceSizeGuess - len - 1);
+        const s = Math.floor(Math.random() * (maxStart+1));
+        const e = s + len - 1;
+        ranges.push([s,e]);
+      }
+      return ranges;
+    }
+    for(let i=0;i<n;i++){
+      const s = i*len;
+      const e = s + len - 1;
+      ranges.push([s,e]);
+    }
+    return ranges;
+  }
+
+  async function run(){
+    // abort previous
+    controllers.forEach(c => c.abort && c.abort());
+    controllers = [];
+
+    const url = $("#url").value.trim() || "/dl_sponza.glb";
+    const n = Math.max(2, Math.min(12, parseInt($("#nreq").value,10)||6));
+    const len = parseInt($("#bytesEach").value,10) || (4*1024*1024);
+    const mode = $("#offsetMode").value;
+    const staggerMs = Math.max(0, parseInt($("#staggerMs").value,10)||0);
+    const startOrder = $("#startOrder").value;
+
+    $("#reqs").innerHTML = "";
+    $("#tbody").innerHTML = "";
+    $("#summary").textContent = "Preparing…";
+    logEl.textContent = "";
+
+    const urgencies = parseUrgencies(n);
+    const ranges = calcRanges(n, len, mode);
+    const plan = urgencies.map((u, i) => ({ idx:i, u, range:`bytes=${ranges[i][0]}-${ranges[i][1]}`, startDelay:0 }));
+
+    // Ensure lower-urgency (higher u) are started AFTER higher-urgency ones.
+    if (startOrder === "lowFirst") {
+      // rank by u ascending (0,1,2,...) so lower u starts earlier
+      const sorted = plan.slice().sort((a,b)=> a.u - b.u);
+      // assign delay proportional to rank difference
+      sorted.forEach((p, rank) => { p.startDelay = rank * staggerMs; });
+      // write back delays to original plan entries
+      sorted.forEach(p => { plan[p.idx].startDelay = p.startDelay; });
+    } else {
+      // as listed: keep zero (or uniform) delay
+      plan.forEach(p => p.startDelay = 0);
+    }
+
+    // UI rows/cards
+    plan.forEach(p => { $("#reqs").appendChild(mkReqCard(p.idx, p.u)); });
+    plan.forEach(p => { $("#tbody").appendChild(mkRow(p.idx, p.u, p.range, `u=${p.u}, i=?1`)); });
+
+    const tSuiteStart = performance.now();
+    let finished = 0;
+
+    const trials = plan.map(p => (async () => {
+      const row = $("#tbody").children[p.idx];
+      const bar = document.getElementById(`bar${p.idx}`);
+      const pct = document.getElementById(`pct${p.idx}`);
+
+      const ctrl = new AbortController();
+      controllers.push(ctrl);
+
+      // Staggered start to ensure lower urgency values start after higher ones.
+      if (p.startDelay > 0) await sleep(p.startDelay);
+
+      const tStart = performance.now();
+      row.querySelector("[data-start]").textContent = msfmt(tStart, tSuiteStart) + ` (+${p.startDelay}ms)`;
+      log(`#${p.idx+1} START u=${p.u} delay=${p.startDelay}ms ${p.range}`);
+
+      const headers = new Headers();
+      headers.set("Range", p.range);
+      headers.set("Priority", `u=${p.u}, i=?1`);
+
+      const meta = { ...p, expectedBytes: (()=>{ const m=p.range.match(/bytes=(\d+)-(\d+)/); return m?(parseInt(m[2])-parseInt(m[1])+1):0; })(),
+                     t0: tStart, ttfb: null, tend: null, bytes:0, status:null, ok:null };
+
+      try {
+        const resp = await fetch(url, { method:"GET", headers, cache:"no-store", signal: ctrl.signal });
+        meta.status = `${resp.status}`;
+        const reader = resp.body?.getReader();
+        if (!reader) throw new Error("ReadableStream missing");
+
+        // First readable tick approximates TTFB
+        while (true) {
+          const {done, value} = await reader.read();
+          if (value && !meta.ttfb) meta.ttfb = performance.now();
+          if (done) break;
+          meta.bytes += value.byteLength;
+          const pcent = Math.min(100, Math.floor(meta.bytes / meta.expectedBytes * 100));
+          bar.style.width = pcent + "%";
+          pct.textContent = pcent + "%";
+        }
+
+        meta.tend = performance.now();
+        meta.ok = resp.ok;
+
+        row.querySelector("[data-ttfb]").textContent = meta.ttfb ? msfmt(meta.ttfb, meta.t0) : "—";
+        row.querySelector("[data-done]").textContent = msfmt(meta.tend, meta.t0);
+        row.querySelector("[data-bytes]").textContent = `${meta.bytes} (${kb(meta.bytes)})`;
+        row.querySelector("[data-res]").textContent = `${meta.status} ${resp.headers.get("content-type") || ""}`.trim();
+
+        finished++;
+        log(`#${p.idx+1} DONE u=${p.u} ttfb=${row.querySelector("[data-ttfb]").textContent}ms total=${row.querySelector("[data-done]").textContent}ms bytes=${meta.bytes}`);
+        return meta;
+
+      } catch (e) {
+        meta.tend = performance.now();
+        row.querySelector("[data-ttfb]").textContent = meta.ttfb ? msfmt(meta.ttfb, meta.t0) : "—";
+        row.querySelector("[data-done]").textContent = "ERR";
+        row.querySelector("[data-res]").textContent = "aborted/error";
+        log(`#${p.idx+1} ERROR ${String(e)}`);
+        return meta;
+      }
+    })());
+
+    const results = await Promise.all(trials);
+    const tSuiteEnd = performance.now();
+
+    // Summaries
+    const byStart = results.slice().sort((a,b)=> a.t0 - b.t0).map(r => `#${r.idx+1}(u=${r.u},+${(r.t0 - tSuiteStart).toFixed(0)}ms)`).join(" -> ");
+    const byDone  = results.slice().sort((a,b)=> (a.tend||Infinity) - (b.tend||Infinity)).map(r => `#${r.idx+1}(u=${r.u})`).join(" -> ");
+    const inversions = (() => {
+      const arr = results.slice().sort((a,b)=> (a.tend||Infinity)-(b.tend||Infinity));
+      let p=0; for(let i=1;i<arr.length;i++){ if(arr[i].u < arr[i-1].u) p++; } return p;
+    })();
+
+    $("#summary").textContent =
+      `Started (staggered): ${byStart}. Finished: ${byDone}. ` +
+      `Total ${(tSuiteEnd - tSuiteStart).toFixed(1)} ms. ` +
+      (inversions===0 ? "Finish order aligns with priorities." : `Detected ${inversions} inversion(s) vs ideal priority order (lower u should finish earlier).`);
+
+    log(`SUMMARY: start=${byStart}`);
+    log(`SUMMARY: finish=${byDone}`);
+    log(inversions===0 ? "VERDICT: Priority respected (coarse check)." : `VERDICT: ${inversions} inversion(s) — priority likely not fully respected.`);
+  }
+
+  $("#btnRun").onclick = run;
+  $("#btnAbort").onclick = () => { controllers.forEach(c => c.abort && c.abort()); log("Abort requested."); };
+})();
+</script>
+</body>
+</html>

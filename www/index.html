@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <title>HTTP Range Tester (H3 / quiche)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      --bg: #0f1216;
+      --panel: #141922;
+      --text: #e6e6e6;
+      --muted: #9aa4b2;
+      --accent: #5eead4;
+      --bad: #f87171;
+      --ok: #4ade80;
+      --warn: #fbbf24;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Fira Sans", "Droid Sans";
+    }
+
+    header {
+      padding: 16px 20px;
+      border-bottom: 1px solid #202938;
+      background: #0c0f13;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+      letter-spacing: .2px;
+    }
+
+    main {
+      padding: 20px;
+      max-width: 1100px;
+      margin: auto;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid #202938;
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 18px;
+    }
+
+    .row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    label {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    input[type="text"] {
+      width: 100%;
+      padding: 10px 12px;
+      background: #0d1117;
+      color: var(--text);
+      border: 1px solid #222a39;
+      border-radius: 8px;
+      font-family: var(--mono);
+    }
+
+    .grow {
+      flex: 1 1 320px;
+    }
+
+    button {
+      background: #1b2432;
+      color: #e5f8f5;
+      border: 1px solid #273246;
+      border-radius: 8px;
+      padding: 9px 12px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    button:hover {
+      border-color: #3a4b67;
+    }
+
+    .btn-accent {
+      background: #123c36;
+      border-color: #1d5b52;
+      color: var(--accent);
+    }
+
+    .btn-bad {
+      background: #3a1012;
+      border-color: #5d1c21;
+      color: var(--bad);
+    }
+
+    .btn-ok {
+      background: #113315;
+      border-color: #1f5227;
+      color: var(--ok);
+    }
+
+    .btn-warn {
+      background: #3b2d10;
+      border-color: #5c4518;
+      color: var(--warn);
+    }
+
+    code,
+    pre {
+      font-family: var(--mono);
+      font-size: 12.5px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    @media (max-width: 1000px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .kv {
+      display: grid;
+      grid-template-columns: 180px 1fr;
+      gap: 6px 10px;
+    }
+
+    .pill {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      border: 1px solid #2a364a;
+      background: #0e141d;
+      color: #a3b2c7;
+      font-family: var(--mono);
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .hr {
+      height: 1px;
+      background: #202938;
+      margin: 10px 0;
+    }
+
+    .mono {
+      font-family: var(--mono);
+    }
+
+    .small {
+      font-size: 12px;
+    }
+
+    .box {
+      background: #0d1117;
+      border: 1px solid #232a3a;
+      border-radius: 8px;
+      padding: 10px;
+      overflow: auto;
+      max-height: 260px;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>HTTP Range Tester (for quiche H3 server)</h1>
+  </header>
+  <main>
+    <div class="card">
+      <div class="row">
+        <div class="grow">
+          <label>Resource URL (same origin):</label>
+          <input id="url" type="text" value="/dl_sponza.glb" />
+        </div>
+        <div class="grow">
+          <label>Range header (e.g., <code>bytes=0-99</code> or <code>bytes=0-9,20-29</code>):</label>
+          <input id="range" type="text" placeholder="bytes=0-99" />
+        </div>
+        <div class="grow">
+          <label>(Optional) If-Range:</label>
+          <input id="ifrange" type="text" placeholder='W/"etag-here" or HTTP-date' />
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px; gap:8px;">
+        <button class="btn-accent" id="btnFetch">Fetch</button>
+        <button id="btnFull">GET full (200)</button>
+        <button id="btnFirst100">bytes=0-99</button>
+        <button id="btnFrom1k">bytes=1000-</button>
+        <button id="btnSuffix256">bytes=-256</button>
+        <button id="btnMulti">bytes=0-9,20-29,100-109</button>
+        <button class="btn-bad" id="btnUnsat">Unsatisfiable</button>
+      </div>
+      <div class="small muted" style="margin-top:8px;">
+        Tip: open DevTools → Network and enable the <em>Protocol</em> column to confirm <code>h3</code>.
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3 style="margin:0 0 10px 0;">Response</h3>
+        <div class="kv small">
+          <div>Status</div>
+          <div><span id="status" class="pill">—</span></div>
+          <div>Content-Length</div>
+          <div><code id="clen">—</code></div>
+          <div>Content-Type</div>
+          <div><code id="ctype">—</code></div>
+          <div>Content-Range</div>
+          <div><code id="crange">—</code></div>
+          <div>Effective-Length</div>
+          <div><code id="efflen">—</code></div>
+          <div>Overhead (raw - effective)</div>
+          <div><code id="overhead">—</code></div>
+        </div>
+        <div class="hr"></div>
+        <div class="small muted">All headers</div>
+        <div id="headers" class="box mono"></div>
+        <div id="lenExplain" class="small muted" style="margin-top:8px;"></div>
+        <div class="hr"></div>
+
+        <div class="row">
+          <button id="btnSave" class="btn-ok" disabled>Save body as file</button>
+          <span class="small muted">first 64 bytes (hex):</span>
+        </div>
+        <pre id="hex" class="box"></pre>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 10px 0;">Multipart analysis</h3>
+        <div class="small muted">Only shown when <code>Content-Type: multipart/byteranges</code>.</div>
+        <div class="kv small" style="margin-top:8px;">
+          <div>Boundary</div>
+          <div><code id="boundary">—</code></div>
+          <div>Detected parts</div>
+          <div><code id="partsCount">—</code></div>
+        </div>
+        <div class="hr"></div>
+        <div id="parts" class="box mono"></div>
+      </div>
+    </div>
+
+    <div class="card" id="asciiCard">
+      <h3 style="margin:0 0 10px 0;">ASCII preview</h3>
+      <div class="small muted">Renders bytes from the actual response body (after multipart assembly).</div>
+      <div class="row" style="margin:10px 0; gap:12px;">
+        <label>Show first</label>
+        <select id="asciiLen">
+          <option value="256">256</option>
+          <option value="512" selected>512</option>
+          <option value="1024">1024</option>
+          <option value="2048">2048</option>
+          <option value="4096">4096</option>
+        </select>
+        <label>Mode</label>
+        <select id="asciiMode">
+          <option value="plain" selected>Plain</option>
+          <option value="escaped">Escaped</option>
+        </select>
+        <button id="btnCopyAscii">Copy</button>
+        <span class="small muted">total bytes: <code id="asciiTotal">0</code></span>
+      </div>
+      <pre id="asciiBox" class="box mono" style="white-space:pre-wrap; word-break:break-word;"></pre>
+    </div>
+
+  </main>
+
+  <script>
+    // --- small helpers ---
+    let lastCleanBuf = new Uint8Array(0);
+
+    const $ = sel => document.querySelector(sel);
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
+
+    function toHex(u8) {
+      const h = [];
+      for (let i = 0; i < u8.length; i++) {
+        const b = u8[i].toString(16).padStart(2, "0");
+        h.push(b);
+        if ((i + 1) % 16 === 0) h.push("\n");
+        else if ((i + 1) % 2 === 0) h.push(" ");
+      }
+      return h.join("");
+    }
+
+    // Convert bytes to ASCII/escaped string for preview
+    function bytesToAscii(u8, maxLen, mode = "plain") {
+      const len = Math.min(u8.length, maxLen);
+      let out = "";
+      for (let i = 0; i < len; i++) {
+        const b = u8[i];
+        // printable ASCII range
+        if (b >= 0x20 && b <= 0x7E) {
+          out += String.fromCharCode(b);
+          continue;
+        }
+        if (mode === "plain") {
+          // keep actual newlines/tabs for readability
+          if (b === 0x0A) { out += "\n"; continue; } // \n
+          if (b === 0x0D) { out += "\r"; continue; } // \r
+          if (b === 0x09) { out += "\t"; continue; } // \t
+          out += "·"; // dot for other control / non-ASCII bytes
+        } else {
+          // escaped: show control and non-ASCII explicitly
+          if (b === 0x0A) { out += "\\n"; continue; }
+          if (b === 0x0D) { out += "\\r"; continue; }
+          if (b === 0x09) { out += "\\t"; continue; }
+          out += "\\x" + b.toString(16).padStart(2, "0");
+        }
+      }
+      return out;
+    }
+
+    // Render into the ASCII card
+    function updateAsciiView(buf) {
+      const maxLen = parseInt($("#asciiLen").value, 10) || 512;
+      const mode = $("#asciiMode").value || "plain";
+      $("#asciiTotal").textContent = buf.length.toString();
+      $("#asciiBox").textContent = bytesToAscii(buf, maxLen, mode);
+    }
+
+    function renderHeaders(resp) {
+      const lines = [];
+      for (const [k, v] of resp.headers.entries()) lines.push(`${k}: ${v}`);
+      return lines.join("\n");
+    }
+
+    // Byte-pattern search in Uint8Array
+    function indexOfBytes(hay, needle, from = 0) {
+      outer: for (let i = from; i + needle.length <= hay.length; i++) {
+        for (let j = 0; j < needle.length; j++) {
+          if (hay[i + j] !== needle[j]) continue outer;
+        }
+        return i;
+      }
+      return -1;
+    }
+
+    // Parse multipart/byteranges (binary-safe) and return bodies
+    function parseMultipart(u8, ctypeVal) {
+      const m = /boundary=([^;]+)/i.exec(ctypeVal || "");
+      if (!m) return { boundary: null, parts: [] };
+
+      const boundary = m[1].trim().replace(/^"|"$/g, "");
+      const dashBoundary = enc.encode("--" + boundary);
+      const dashBoundaryClose = enc.encode("--" + boundary + "--");
+      const CRLF = enc.encode("\r\n");
+      const CRLFCRLF = enc.encode("\r\n\r\n");
+
+      const parts = [];
+      let pos = 0;
+
+      // find first boundary
+      let start = indexOfBytes(u8, dashBoundary, pos);
+      if (start === -1) return { boundary, parts: [] };
+
+      while (start !== -1) {
+        // check for closing boundary
+        if (indexOfBytes(u8, dashBoundaryClose, start) === start) break;
+
+        // boundary line may be followed by optional WSP + CRLF, but at least CRLF
+        let hdrStart = indexOfBytes(u8, CRLF, start + dashBoundary.length);
+        if (hdrStart === -1) break;
+        hdrStart += CRLF.length;
+
+        // headers end at CRLFCRLF
+        const sep = indexOfBytes(u8, CRLFCRLF, hdrStart);
+        if (sep === -1) break;
+
+        const headersBytes = u8.slice(hdrStart, sep);
+        const headersText = dec.decode(headersBytes);
+
+        const bodyStart = sep + CRLFCRLF.length;
+
+        // next boundary (or closing) marks the end of the body; allow \r\n just before it
+        let nextB = indexOfBytes(u8, dashBoundary, bodyStart);
+        if (nextB === -1) {
+          nextB = indexOfBytes(u8, dashBoundaryClose, bodyStart);
+          if (nextB === -1) nextB = u8.length;
+        }
+
+        // strip trailing CRLF that precedes boundary if present
+        let bodyEnd = nextB;
+        if (bodyEnd >= 2 && u8[bodyEnd - 2] === 13 && u8[bodyEnd - 1] === 10) {
+          bodyEnd -= 2; // remove \r\n
+        }
+
+        const body = u8.slice(bodyStart, bodyEnd);
+
+        // try to parse Content-Range to capture order
+        let rangeStart = null, rangeEnd = null, rangeTotal = null;
+        const crMatch = /content-range:\s*bytes\s+(\d+)-(\d+)\/(\d+|\*)/i.exec(headersText);
+        if (crMatch) {
+          rangeStart = parseInt(crMatch[1], 10);
+          rangeEnd = parseInt(crMatch[2], 10);
+          rangeTotal = crMatch[3] === "*" ? null : parseInt(crMatch[3], 10);
+        }
+
+        parts.push({ headersText, body, length: body.length, rangeStart, rangeEnd, rangeTotal });
+
+        // move to exactly next boundary
+        start = nextB;
+      }
+
+      return { boundary, parts };
+    }
+
+    function assembleMultipart(parts) {
+      // Sort by starting offset if available; otherwise keep original order
+      const sorted = parts.slice().sort((a, b) => {
+        if (a.rangeStart == null && b.rangeStart == null) return 0;
+        if (a.rangeStart == null) return 1;
+        if (b.rangeStart == null) return -1;
+        return a.rangeStart - b.rangeStart;
+      });
+
+      let total = 0;
+      for (const p of sorted) total += p.body.length;
+
+      const out = new Uint8Array(total);
+      let offset = 0;
+      for (const p of sorted) {
+        out.set(p.body, offset);
+        offset += p.body.length;
+      }
+      return out;
+    }
+
+    async function doFetch(customRange) {
+      const url = $("#url").value.trim() || "/dl_sponza.glb";
+      const headers = {};
+      const r = customRange ?? $("#range").value.trim();
+      if (r) headers["Range"] = r;
+      const ifr = $("#ifrange").value.trim();
+      if (ifr) headers["If-Range"] = ifr;
+
+      const resp = await fetch(url, { headers, cache: "no-store" });
+      const rawBuf = new Uint8Array(await resp.arrayBuffer());
+
+      // Show basic fields (raw response metadata)
+      $("#status").textContent = resp.status + " " + (resp.statusText || "");
+      $("#status").className = "pill " + (resp.status === 206 ? "btn-ok" : resp.status === 416 ? "btn-bad" : "");
+      $("#clen").textContent = resp.headers.get("content-length") || "—";
+      $("#ctype").textContent = resp.headers.get("content-type") || "—";
+      $("#crange").textContent = resp.headers.get("content-range") || "—";
+      $("#headers").textContent = renderHeaders(resp);
+
+      // Default: the body is the raw buffer
+      let cleanBuf = rawBuf;
+
+      // Multipart inspection + extraction
+      $("#boundary").textContent = "—";
+      $("#partsCount").textContent = "—";
+      $("#parts").textContent = "";
+
+      const ctype = resp.headers.get("content-type") || "";
+      if (/multipart\/byteranges/i.test(ctype)) {
+        const parsed = parseMultipart(rawBuf, ctype);
+        $("#boundary").textContent = parsed.boundary || "n/a";
+        $("#partsCount").textContent = parsed.parts.length.toString();
+
+        // Show analysis (headers + lengths)
+        const lines = [];
+        parsed.parts.forEach((p, i) => {
+          lines.push(`-- Part #${i + 1} --`);
+          lines.push(p.headersText.trim());
+          const span = (p.rangeStart != null && p.rangeEnd != null)
+            ? `bytes ${p.rangeStart}-${p.rangeEnd} (${p.length} bytes)`
+            : `(body length: ${p.length} bytes)`;
+          lines.push(span);
+          lines.push("");
+        });
+        $("#parts").textContent = lines.join("\n");
+
+        // Build the actual bytes-only payload (no boundaries)
+        cleanBuf = assembleMultipart(parsed.parts);
+      }
+
+
+      // Calculate lengths
+      const rawLenHeader = resp.headers.get("content-length");
+      const rawLen = rawLenHeader ? parseInt(rawLenHeader, 10) : rawBuf.length; // fallback to received bytes
+      const effLen = cleanBuf.length;
+      const overhead = rawLen - effLen;
+
+      // Update UI
+      $("#efflen").textContent = effLen.toString();
+      $("#overhead").textContent = isFinite(overhead) ? String(overhead) : "—";
+
+      // Clarify semantics (only for multipart)
+      const isMultipart = /multipart\/byteranges/i.test(resp.headers.get("content-type") || "");
+      if (isMultipart) {
+        $("#lenExplain").textContent =
+          "Multipart response: Content-Length includes MIME boundaries and per-part headers. Effective-Length is just the requested bytes you’ll save.";
+      } else {
+        $("#lenExplain").textContent = "";
+      }
+
+      // Use the CLEAN buffer for preview + save
+      $("#hex").textContent = toHex(cleanBuf.slice(0, 64));
+      $("#btnSave").disabled = cleanBuf.length === 0;
+
+      lastCleanBuf = cleanBuf;
+      updateAsciiView(lastCleanBuf);
+      // Use the CLEAN buffer for preview + save
+      $("#hex").textContent = toHex(cleanBuf.slice(0, 64));
+      $("#btnSave").disabled = cleanBuf.length === 0;
+
+      $("#btnSave").onclick = () => {
+        const a = document.createElement("a");
+        // Use octet-stream to avoid multipart ctype misleading the saved file
+        const blob = new Blob([cleanBuf], { type: "application/octet-stream" });
+        a.href = URL.createObjectURL(blob);
+        // If a Range was sent, hint that this is a partial
+        const base = (url.split("/").pop() || "part.bin");
+        const name = r ? `${base}.range.bin` : base;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 0);
+      };
+    }
+
+
+    // Wire buttons
+    $("#btnFetch").onclick = () => doFetch();
+    $("#btnFull").onclick = () => { $("#range").value = ""; doFetch(""); };
+    $("#btnFirst100").onclick = () => { $("#range").value = "bytes=0-99"; doFetch("bytes=0-99"); };
+    $("#btnFrom1k").onclick = () => { $("#range").value = "bytes=1000-"; doFetch("bytes=1000-"); };
+    $("#btnSuffix256").onclick = () => { $("#range").value = "bytes=-256"; doFetch("bytes=-256"); };
+    $("#btnMulti").onclick = () => { $("#range").value = "bytes=0-9,20-29,100-109"; doFetch("bytes=0-9,20-29,100-109"); };
+    $("#btnUnsat").onclick = () => { $("#range").value = "bytes=9999999999-99999999999"; doFetch("bytes=9999999999-99999999999"); };
+    // ASCII controls reactively re-render
+    $("#asciiLen").onchange = () => updateAsciiView(lastCleanBuf);
+    $("#asciiMode").onchange = () => updateAsciiView(lastCleanBuf);
+    $("#btnCopyAscii").onclick = async () => {
+      const text = $("#asciiBox").textContent || "";
+      try {
+        await navigator.clipboard.writeText(text);
+        $("#btnCopyAscii").textContent = "Copied!";
+        setTimeout(() => { $("#btnCopyAscii").textContent = "Copy"; }, 900);
+      } catch {
+        // Fallback: select text
+        const r = document.createRange();
+        r.selectNodeContents($("#asciiBox"));
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+      }
+    };
+
+
+    // Autofetch on load (full GET) so you see something immediately
+    window.addEventListener("DOMContentLoaded", () => doFetch(""));
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,64 @@
+QUICHE HTTP SERVER - EXECUTION FLOW
+
+SETUP
+- Create UDP socket; register with mio poller (READABLE).
+- Build quiche::Config (ALPN, flow control, pacing, etc.).
+- Maintain:
+  * clients: client_id -> { conn, http_conn, partial_requests, partial_responses, ... }
+  * clients_ids: quic_cid -> client_id
+  * counters/state: next_client_id, pkt_count, continue_write, max_datagram_size.
+
+MAIN LOOP
+- Compute poll timeout: min(conn.timeout()) or 0 if continue_write.
+- poll() for events or timeout.
+
+RECEIVE PATH (WHAT HAPPENS TO INBOUND UDP)
+- while UDP readable:
+  1) recv_from(buf) -> pkt_buf, peer_addr
+  2) quiche::Header::from_slice(pkt_buf) -> hdr
+  3) map hdr.dcid to client:
+     - if none and pkt not Initial -> drop
+     - if version mismatch -> send version negotiation and continue
+     - if retry enabled and no/invalid token -> send Retry and continue
+     - else accept: quiche::accept(...) -> conn
+       * store in clients; index CIDs in clients_ids
+  4) conn.recv(pkt_buf, RecvInfo{to:local_addr, from:peer_addr})
+     - decrypt, ack, update loss/cc/timers
+     - process frames:
+       * CRYPTO: handshake progress
+       * STREAM: append to per-stream reassembly buffers
+       * CONTROL/FC/PATH: update transport state
+  5) if ALPN negotiated and connection established/0-RTT:
+     - create http_conn: Http09Conn or Http3Conn::with_conn(...)
+     - update max_datagram_size from conn
+  6) if http_conn exists:
+     - WRITES FIRST: for s in writable_response_streams(conn):
+         http_conn.handle_writable(conn, partial_responses, s)
+         (push pending response bytes from partial_responses into conn stream send buffers)
+     - then READS: http_conn.handle_requests(conn, partial_requests, partial_responses, ...)
+         (consume newly received stream bytes; parse H3 control/headers/bodies; enqueue/extend responses)
+  7) handle_path_events(conn)  (probe/validate/migrate)
+  8) retire/add source CIDs (retired_scid_next, scids_left/new_scid)
+
+SEND PATH (HOW BYTES LEAVE)
+- For each client:
+  1) adapt max_send_burst based on observed loss
+  2) compute budget = min(conn.send_quantum(), max_send_burst), align to MSS
+  3) loop until budget used:
+     - conn.send(out[..]) -> (bytes_written, send_info)
+       * builds QUIC packets with ACK/control/handshake/H3 stream frames
+       * respects cwnd/flow control/pacing
+     - stop if quiche::Error::Done or wrote < MSS or budget hit
+  4) send_to(socket, out[..total_write], send_info, pacing/GSO)
+  5) if burst fully used: continue_write = true (immediate next poll)
+
+GC
+- Remove closed connections; unindex their CIDs.
+
+DATA LIFECYCLE SUMMARY (RECEIVED PACKETS TO APP)
+- UDP datagram -> conn.recv()
+- conn.recv() -> stream bytes available to HTTP
+- http_conn.handle_requests() -> parse H3/QPACK/control; build/update partial_responses
+- http_conn.handle_writable() -> move response bytes from partial_responses into QUIC send buffers
+- conn.send() -> packetize to UDP
+- send_to() -> transmit on socket

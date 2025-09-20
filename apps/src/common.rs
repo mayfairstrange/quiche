@@ -51,6 +51,8 @@ use quiche::ConnectionId;
 use quiche::h3::NameValue;
 use quiche::h3::Priority;
 
+use crate::range as hrange;
+
 pub fn stdout_sink(out: String) {
     print!("{out}");
 }
@@ -156,8 +158,9 @@ pub fn make_qlog_writer(
     match std::fs::File::create(&path) {
         Ok(f) => std::io::BufWriter::new(f),
 
-        Err(e) =>
-            panic!("Error creating qlog file attempted path was {path:?}: {e}"),
+        Err(e) => {
+            panic!("Error creating qlog file attempted path was {path:?}: {e}")
+        },
     }
 }
 
@@ -971,11 +974,12 @@ impl Http3Conn {
         let decided_method = match method {
             Some(method) => {
                 match method {
-                    "" =>
+                    "" => {
                         return Err((
                             H3_MESSAGE_ERROR,
                             ":method value cannot be empty".to_string(),
-                        )),
+                        ))
+                    },
 
                     "CONNECT" => {
                         // not allowed
@@ -994,11 +998,12 @@ impl Http3Conn {
                 }
             },
 
-            None =>
+            None => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     ":method cannot be missing".to_string(),
-                )),
+                ))
+            },
         };
 
         let decided_scheme = match scheme {
@@ -1022,54 +1027,61 @@ impl Http3Conn {
                 scheme
             },
 
-            None =>
+            None => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     ":scheme cannot be missing".to_string(),
-                )),
+                ))
+            },
         };
 
         let decided_host = match (authority, host) {
-            (None, Some("")) =>
+            (None, Some("")) => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     "host value cannot be empty".to_string(),
-                )),
+                ))
+            },
 
-            (Some(""), None) =>
+            (Some(""), None) => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     ":authority value cannot be empty".to_string(),
-                )),
+                ))
+            },
 
-            (Some(""), Some("")) =>
+            (Some(""), Some("")) => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     ":authority and host value cannot be empty".to_string(),
-                )),
+                ))
+            },
 
-            (None, None) =>
+            (None, None) => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     ":authority and host missing".to_string(),
-                )),
+                ))
+            },
 
             // Any other combo, prefer :authority
             (..) => authority.unwrap(),
         };
 
         let decided_path = match path {
-            Some("") =>
+            Some("") => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     ":path value cannot be empty".to_string(),
-                )),
+                ))
+            },
 
-            None =>
+            None => {
                 return Err((
                     H3_MESSAGE_ERROR,
                     ":path cannot be missing".to_string(),
-                )),
+                ))
+            },
 
             Some(path) => path,
         };
@@ -1105,6 +1117,44 @@ impl Http3Conn {
 
             _ => (405, Vec::new()),
         };
+
+        if status == 200 && !body.is_empty() {
+            // Minimal content-type; you might replace this with real type sniffing later:
+            let content_type = Some(b"application/octet-stream".to_vec());
+
+            // Prepare the Range context
+            let ctx = hrange::RangeContext {
+                path: file_path.clone(),
+                total_len: body.len() as u64,
+                etag: None, // fill if you compute an ETag
+                last_modified_http_date: None, // fill if you have Last-Modified
+                content_type,
+                if_range: None, // if you parse If-Range elsewhere, pass it here
+            };
+
+            // Use default config (multipart allowed, up to 16 parts)
+            let cfg = hrange::RangeConfig::default();
+
+            // Attempt to build a Range response based on request headers
+            if let Ok(Some(rr)) =
+                hrange::handle_range_request(request, &ctx, &cfg)
+            {
+                // Replace status/body/headers completely with the range result.
+                // Note: We also need to update the final header list we return below.
+                // So stash rr into locals we’ll return.
+                let mut headers = rr.headers;
+
+                // Also make sure to carry "server: quiche" (if you want it present on 206/416)
+                // If not already included by your range:: code, push it here:
+                let has_server = headers.iter().any(|h| h.name() == b"server");
+                if !has_server {
+                    headers.push(quiche::h3::Header::new(b"server", b"quiche"));
+                }
+
+                // Return from here with Range headers/body instead of the normal 200.
+                return Ok((headers, rr.body, priority));
+            }
+        }
 
         let headers = vec![
             quiche::h3::Header::new(b":status", status.to_string().as_bytes()),
@@ -1268,14 +1318,15 @@ impl HttpConn for Http3Conn {
                                 rw.write_all(&buf[..read]).ok();
                             },
 
-                            None =>
+                            None => {
                                 if !self.dump_json {
                                     self.output_sink.borrow_mut()(unsafe {
                                         String::from_utf8_unchecked(
                                             buf[..read].to_vec(),
                                         )
                                     });
-                                },
+                                }
+                            },
                         }
                     }
                 },
@@ -1437,19 +1488,20 @@ impl HttpConn for Http3Conn {
                             },
                         };
 
-                    match self.h3_conn.take_last_priority_update(stream_id) {
-                        Ok(v) => {
-                            priority = v;
-                        },
+                    // match self.h3_conn.take_last_priority_update(stream_id) {
+                    //     Ok(v) => {
+                    //         priority = v;
+                    //     },
 
-                        Err(quiche::h3::Error::Done) => (),
+                    //     Err(quiche::h3::Error::Done) => (),
 
-                        Err(e) => error!(
-                            "{} error taking PRIORITY_UPDATE {}",
-                            conn.trace_id(),
-                            e
-                        ),
-                    }
+                    //     Err(e) => error!(
+                    //         "{} error taking PRIORITY_UPDATE {}",
+                    //         conn.trace_id(),
+                    //         e
+                    //     ),
+                    // }
+                    info!("BEFORE ASSIGNMENT PRIORITY: {:?}", priority.as_slice());
 
                     if !priority.is_empty() {
                         headers.push(quiche::h3::Header::new(
@@ -1457,6 +1509,7 @@ impl HttpConn for Http3Conn {
                             priority.as_slice(),
                         ));
                     }
+
 
                     #[cfg(feature = "sfv")]
                     let priority =
