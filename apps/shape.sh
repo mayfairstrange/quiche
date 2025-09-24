@@ -14,23 +14,24 @@ INGRESS="${INGRESS:-0}"
 
 echo "[shape] tc on ${IF}: rate=${RATE} burst=${BURST} delay=${LAT}±${JIT} loss=${LOSS} reorder=${REORDER} dup=${DUP} corrupt=${CORRUPT} ingress=${INGRESS}"
 
-# cleanup
+# Clean up any existing qdisc (ignore errors)
 tc qdisc del dev "$IF" root 2>/dev/null || true
 tc qdisc del dev "$IF" ingress 2>/dev/null || true
 
-# egress: tbf -> netem
+# Egress: token bucket -> netem
 tc qdisc add dev "$IF" root handle 1: tbf rate "$RATE" burst "$BURST" latency 400ms
 tc qdisc add dev "$IF" parent 1: handle 10: netem \
   delay "$LAT" "$JIT" distribution normal \
   loss "$LOSS" reorder "$REORDER" duplicate "$DUP" corrupt "$CORRUPT"
 
-# optional ingress via IFB
+# Optional ingress shaping via IFB
 if [ "$INGRESS" = "1" ]; then
   modprobe ifb numifbs=1 2>/dev/null || true
   ip link add ifb0 type ifb 2>/dev/null || true
   ip link set up dev ifb0
   tc qdisc add dev "$IF" handle ffff: ingress
   tc filter add dev "$IF" parent ffff: protocol all u32 match u32 0 0 action mirred egress redirect dev ifb0
+
   tc qdisc del dev ifb0 root 2>/dev/null || true
   tc qdisc add dev ifb0 root handle 1: tbf rate "$RATE" burst "$BURST" latency 400ms
   tc qdisc add dev ifb0 parent 1: handle 10: netem \
