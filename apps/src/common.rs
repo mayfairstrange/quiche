@@ -1488,20 +1488,19 @@ impl HttpConn for Http3Conn {
                             },
                         };
 
-                    // match self.h3_conn.take_last_priority_update(stream_id) {
-                    //     Ok(v) => {
-                    //         priority = v;
-                    //     },
+                    match self.h3_conn.take_last_priority_update(stream_id) {
+                        Ok(v) => {
+                            priority = v;
+                        },
 
-                    //     Err(quiche::h3::Error::Done) => (),
+                        Err(quiche::h3::Error::Done) => (),
 
-                    //     Err(e) => error!(
-                    //         "{} error taking PRIORITY_UPDATE {}",
-                    //         conn.trace_id(),
-                    //         e
-                    //     ),
-                    // }
-                    info!("BEFORE ASSIGNMENT PRIORITY: {:?}", priority.as_slice());
+                        Err(e) => error!(
+                            "{} error taking PRIORITY_UPDATE {}",
+                            conn.trace_id(),
+                            e
+                        ),
+                    }
 
                     if !priority.is_empty() {
                         headers.push(quiche::h3::Header::new(

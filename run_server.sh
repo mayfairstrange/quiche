@@ -1,40 +1,22 @@
 #!/bin/sh
 set -e
 
-# Default shaping values
-SHAPE=on
-RATE=5mbit
-BURST=32kbit
-LAT=80ms
-JIT=20ms
-LOSS=0%
-INGRESS=0
-QLOGDIR_HOST="$(pwd)/qlogs"   # host directory for qlogs
-QLOGDIR_CONT="/qlogs"         # container path for qlogs
-
-# Create qlog directory if missing
+# Defaults
+SHAPE=on; RATE=5mbit; BURST=32kbit; LAT=80ms; JIT=20ms; LOSS=0%; INGRESS=0
+QLOGDIR_HOST="$(pwd)/qlogs"; QLOGDIR_CONT="/qlogs"
 mkdir -p "$QLOGDIR_HOST"
 
-# Parse key=value args from the command line to override defaults
+# Parse overrides
 for arg in "$@"; do
   case $arg in
-    SHAPE=*)   SHAPE="${arg#*=}" ;;
-    RATE=*)    RATE="${arg#*=}" ;;
-    BURST=*)   BURST="${arg#*=}" ;;
-    LAT=*)     LAT="${arg#*=}" ;;
-    JIT=*)     JIT="${arg#*=}" ;;
-    LOSS=*)    LOSS="${arg#*=}" ;;
-    INGRESS=*) INGRESS="${arg#*=}" ;;
-    *)
-      echo "Unknown argument: $arg"
-      exit 1
-      ;;
+    SHAPE=*|RATE=*|BURST=*|LAT=*|JIT=*|LOSS=*|INGRESS=*) eval "$arg" ;;
+    *) echo "Unknown arg: $arg"; exit 1 ;;
   esac
 done
 
-echo "Starting quiche-server with shaping:"
-echo "  RATE=$RATE, BURST=$BURST, LAT=$LAT, JIT=$JIT, LOSS=$LOSS, INGRESS=$INGRESS"
-echo "  QLOGDIR=$QLOGDIR_HOST"
+echo "Starting quiche-server with shaping:
+  RATE=$RATE, BURST=$BURST, LAT=$LAT, JIT=$JIT, LOSS=$LOSS, INGRESS=$INGRESS
+  QLOGDIR=$QLOGDIR_HOST"
 
 docker run --rm -it \
   --init \
@@ -47,12 +29,7 @@ docker run --rm -it \
   -e JIT="$JIT" \
   -e LOSS="$LOSS" \
   -e INGRESS="$INGRESS" \
-  -e QLOGDIR="$QLOGDIR_CONT" \
-  -v "$QLOGDIR_HOST":"$QLOGDIR_CONT" \
-  quiche-shaped \
-  quiche-server \
-    --listen 0.0.0.0:4433 \
-    --root /www \
-    --cert /certs/cert.pem \
-    --key /certs/priv.key \
-    --disable-gso
+  -e RUST_LOG=info \
+  -e RUST_BACKTRACE=0 \
+  quiche-shaped
+# ^ no command here; ENTRYPOINT+CMD inside the image run the server with cert/key

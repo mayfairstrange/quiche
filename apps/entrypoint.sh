@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
-# If shaping is requested, apply it once the container is up
 if [ "${SHAPE:-off}" = "on" ]; then
-  /usr/local/bin/shape.sh
+  /usr/local/bin/shape.sh || echo "[shape] warning: shaping failed (continuing)"
 fi
 
-# Hand off to whatever CMD/args were provided
 exec "$@"

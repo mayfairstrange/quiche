@@ -103,8 +103,14 @@ fn main() {
     // Create the configuration for the QUIC connections.
     let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
 
-    config.load_cert_chain_from_pem_file(&args.cert).unwrap();
-    config.load_priv_key_from_pem_file(&args.key).unwrap();
+    if let Err(e) = config.load_cert_chain_from_pem_file(&args.cert) {
+        eprintln!("load_cert_chain_from_pem_file failed: {e:?}");
+        std::process::exit(1);
+    }
+    if let Err(e) = config.load_priv_key_from_pem_file(&args.key) {
+        eprintln!("load_priv_key_from_pem_file failed: {e:?}");
+        std::process::exit(1);
+    }
 
     config.set_application_protos(&conn_args.alpns).unwrap();
 
