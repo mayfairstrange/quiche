@@ -33,10 +33,10 @@ use std::rc::Rc;
 
 use std::cell::RefCell;
 
+use quiche::h3;
 use ring::rand::*;
 
 const MAX_DATAGRAM_SIZE: usize = 1350;
-
 #[derive(Debug)]
 pub enum ClientError {
     HandshakeFail,
@@ -60,6 +60,20 @@ pub fn connect(
 
     // We'll only connect to the first server provided in URL list.
     let connect_url = &args.urls[0];
+
+    let urgencies: [u8; 4] = [0, 1, 3, 7];
+    let mut prio_urls: Vec<url::Url> = Vec::with_capacity(urgencies.len());
+
+    for u in urgencies {
+        let mut uurl = connect_url.clone();
+        {
+            // Preserve existing query parameters, then add `u`.
+            let mut qp = uurl.query_pairs_mut();
+            qp.append_pair("u", &u.to_string());
+            // drop(qp) happens on scope exit.
+        }
+        prio_urls.push(uurl);
+    }
 
     // Resolve server address.
     let peer_addr = if let Some(addr) = &args.connect_to {
@@ -362,9 +376,9 @@ pub fn connect(
 
         // Create a new application protocol session once the QUIC connection is
         // established.
-        if (conn.is_established() || conn.is_in_early_data()) &&
-            (!args.perform_migration || migrated) &&
-            !app_proto_selected
+        if (conn.is_established() || conn.is_in_early_data())
+            && (!args.perform_migration || migrated)
+            && !app_proto_selected
         {
             // At this stage the ALPN negotiation succeeded and selected a
             // single application protocol name. We'll use this to construct
@@ -395,14 +409,15 @@ pub fn connect(
                     None
                 };
 
+                // Use the same resource multiple times with different urgencies.
                 http_conn = Some(Http3Conn::with_urls(
                     &mut conn,
-                    &args.urls,
-                    args.reqs_cardinal,
+                    &prio_urls, // the expanded URLs with ?u=0,1,3,7
+                    1,          // one request per URL
                     &args.req_headers,
                     &args.body,
                     &args.method,
-                    args.send_priority_update,
+                    args.send_priority_update, // also send PRIORITY_UPDATE
                     conn_args.max_field_section_size,
                     conn_args.qpack_max_table_capacity,
                     conn_args.qpack_blocked_streams,
@@ -473,10 +488,10 @@ pub fn connect(
             scid_sent = true;
         }
 
-        if args.perform_migration &&
-            !new_path_probed &&
-            scid_sent &&
-            conn.available_dcids() > 0
+        if args.perform_migration
+            && !new_path_probed
+            && scid_sent
+            && conn.available_dcids() > 0
         {
             let additional_local_addr =
                 migrate_socket.as_ref().unwrap().local_addr().unwrap();

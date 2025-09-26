@@ -821,6 +821,13 @@ impl Http3Conn {
                     ));
                 }
 
+                if let Some(p) =
+                    crate::common::priority_field_value_from_query_string(url)
+                {
+                    // RFC 9218 Priority header. Mirrors the query so both signals are exercised.
+                    hdrs.push(quiche::h3::Header::new(b"priority", p.as_bytes()));
+                }
+
                 if body.is_some() {
                     hdrs.push(quiche::h3::Header::new(
                         b"content-length",
@@ -1508,7 +1515,6 @@ impl HttpConn for Http3Conn {
                             priority.as_slice(),
                         ));
                     }
-
 
                     #[cfg(feature = "sfv")]
                     let priority =
