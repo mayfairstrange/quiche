@@ -10,7 +10,7 @@ members = [
   "task-killswitch",
   "tokio-quiche",
 ]
-exclude = ["fuzz", "tools/http3_test"]
+exclude = ["fuzz", "tools/http3_test", "quicheclient"]
 resolver = "2"
 
 [workspace.package]

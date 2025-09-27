@@ -41,15 +41,14 @@ COPY apps/shape.sh /usr/local/bin/shape.sh
 COPY apps/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/shape.sh /usr/local/bin/entrypoint.sh
 
-# --- Use quiche’s example certs ---
-# We copy them to the exact paths your server uses
+# Example certs
 COPY apps/src/bin/cert.crt /certs/cert.pem
 COPY apps/src/bin/cert.key /certs/priv.key
 
 ENV PATH="/usr/local/bin:${PATH}" \
     RUST_LOG=info \
-    SHAPE=off IFACE=eth0 RATE=10mbit BURST=32kbit LAT=60ms JIT=10ms LOSS=0% REORDER=0% DUP=0% CORRUPT=0% INGRESS=0
+    SHAPE=off \
+    INGRESS=0
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-# (Your run command overrides CMD, so this is optional)
 CMD ["quiche-server","--listen","0.0.0.0:4433","--root","/www","--cert","/certs/cert.pem","--key","/certs/priv.key","--disable-gso"]
